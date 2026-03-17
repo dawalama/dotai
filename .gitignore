@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+.mypy_cache/
+
+# dotai sync outputs (generated per-user, run `dotai sync` to regenerate)
+.claude/skills/
+.cursorrules
+AGENTS.md
+GEMINI.md
