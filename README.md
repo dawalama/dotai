@@ -43,6 +43,89 @@ dotai sync
 
 This generates agent config files in your project root — `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, and `AGENTS.md` — each with your complete knowledge context inline. For Claude Code, it also generates `.claude/skills/` entries so your skills appear as native slash commands.
 
+## Usage
+
+### Daily workflow
+
+```bash
+# Start of day: sync your knowledge into the project you're working on
+cd ~/my-project
+dotai sync
+
+# Now open your editor — Claude Code, Cursor, Gemini, etc.
+# Your roles, skills, and rules are already loaded.
+```
+
+### Using skills in Claude Code
+
+After `dotai sync`, skills appear as native slash commands:
+
+```
+> /run_review                          # Review current branch diff
+> /run_review as paranoid-reviewer     # Review with security focus
+> /run_ship                            # Sync, test, push, create PR
+> /run_techdebt                        # Scan for tech debt
+> /run_careful                         # Enter production-safety mode
+> /run_verify                          # Run tests, types, lint, build
+```
+
+### Using skills outside Claude Code
+
+Assemble a skill prompt and pipe it into any tool:
+
+```bash
+# Copy a skill prompt to clipboard
+dotai prompt review --role paranoid-reviewer | pbcopy
+
+# Save to a file
+dotai prompt ship > /tmp/ship-prompt.md
+
+# List skills filtered by category
+dotai skills --category deployment
+```
+
+### Recording what you learn
+
+```bash
+# Something went wrong — record it so the AI never repeats it
+dotai learn "auth-header" \
+  --issue "Forgot Bearer prefix on API token" \
+  --correction "Always prepend 'Bearer ' to auth tokens"
+
+# Import a detailed rule from a file
+dotai learn "no-useEffect" --from-file react-rules.md --globs "*.tsx,*.ts"
+
+# Disable a rule for one legacy project
+dotai toggle no-useeffect --off --project legacy-app
+```
+
+### Searching your knowledge
+
+```bash
+# Search by keyword
+dotai search "useEffect"
+
+# Filter by type
+dotai search "review" --type skill
+
+# Filter by tag
+dotai search --tag security
+
+# Combine filters
+dotai search "auth" --type rule --tag react
+```
+
+### Multi-project setup
+
+```bash
+# Initialize project-local overrides
+dotai init ~/my-project
+dotai init ~/other-project
+
+# Each project can have its own rules, roles, and skills in .ai/
+# Project-level rules override global ones during sync
+```
+
 ## Directory Structure
 
 ```
@@ -59,13 +142,16 @@ This generates agent config files in your project root — `CLAUDE.md`, `.cursor
 │   ├── writer.md               # Documentation specialist
 │   └── debugger.md             # Root cause analyst
 ├── skills/                     # Reusable workflows
-│   ├── code-review.md          # Pre-landing PR review (/run_review)
-│   ├── review.md               # Structural code review (/run_review)
+│   ├── review.md               # Code review (/run_review)
 │   ├── commit-helper.md        # Conventional commit messages (/run_commit)
 │   ├── context-dump.md         # Context dump for new sessions (/run_context)
 │   ├── parallel-work.md        # Git worktree parallel dev (/run_parallel)
 │   ├── ship.md                 # Sync, test, push, PR (/run_ship)
 │   ├── techdebt.md             # Find tech debt (/run_techdebt)
+│   ├── careful.md              # Production-safety mode (/run_careful)
+│   ├── investigate.md          # Root-cause analysis (/run_investigate)
+│   ├── scaffold.md             # Boilerplate generation (/run_scaffold)
+│   ├── verify.md               # Run tests, types, lint (/run_verify)
 │   └── deploy/                 # Folder-based skill (with scripts & assets)
 │       ├── main.md
 │       ├── scripts/
@@ -110,6 +196,10 @@ All skill triggers use the `run_` prefix to avoid collisions with built-in agent
 | Parallel Work | `/run_parallel` | Git worktree management |
 | Ship | `/run_ship` | Sync, test, push, create PR |
 | Find Tech Debt | `/run_techdebt` | Identify debt and duplication |
+| Careful Mode | `/run_careful` | Production-safety guardrails |
+| Investigate | `/run_investigate` | Systematic root-cause analysis |
+| Scaffold | `/run_scaffold` | Generate boilerplate from patterns |
+| Verify | `/run_verify` | Run tests, types, lint, build |
 
 ### Skill Format
 
@@ -331,6 +421,7 @@ dotai learn "title" --from-file <f>    # Import structured rule from a file
 dotai learn "title" -i "..." -c "..."  # Record an inline learning
 dotai install <source> [-s skill]      # Install skills from git repo or local path
 dotai new-skill <name> [-t trigger]    # Create a new skill from template
+dotai search "query" [--type t] [--tag] # Search knowledge index
 dotai index [--refresh]                # Build/show knowledge index
 dotai tree                             # Show knowledge tree
 ```
