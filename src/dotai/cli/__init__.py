@@ -54,6 +54,12 @@ def init(
 
         console.print(f"[green]Initialized .ai/ in {project_path}[/green]")
         console.print(f"  Created: rules.md, roles/, skills/, tools/")
+
+        # Auto-sync agent config files into the project
+        from ..sync import sync_project
+        written = sync_project(project_path, config, project_path.name)
+        for f in written:
+            console.print(f"  [green]Synced[/green] {f}")
     else:
         # Global init
         ai_dir = Path.home() / ".ai"
@@ -115,6 +121,7 @@ def init(
         console.print(f"  {ai_dir}/roles/ ({len(list(roles_dir.glob('*.md')))} roles)")
         console.print(f"  {ai_dir}/skills/ ({len(list(skills_dir.glob('*.md')))} skills)")
         console.print(f"  {ai_dir}/tools/")
+        console.print(f"\n[dim]Next: cd into a project and run `dotai sync` to generate agent configs.[/dim]")
 
 
 # Import submodules to register their commands with the app
