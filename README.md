@@ -61,8 +61,11 @@ dotai sync
 After `dotai sync`, skills appear as native slash commands:
 
 ```
+> /run_plan                            # Plan before coding
+> /run_plan as product-manager         # Scope with acceptance criteria
+> /run_plan as systems-architect       # Architecture deep-dive
 > /run_review                          # Review current branch diff
-> /run_review as paranoid-reviewer     # Review with security focus
+> /run_review as security-engineer     # Security-focused audit
 > /run_ship                            # Sync, test, push, create PR
 > /run_techdebt                        # Scan for tech debt
 > /run_careful                         # Enter production-safety mode
@@ -140,7 +143,10 @@ dotai init ~/other-project
 │   ├── founder.md              # Product visionary
 │   ├── ship.md                 # Release engineer
 │   ├── writer.md               # Documentation specialist
-│   └── debugger.md             # Root cause analyst
+│   ├── debugger.md             # Root cause analyst
+│   ├── security.md             # Application security specialist
+│   ├── mentor.md               # Patient teacher and pair programmer
+│   └── product-manager.md      # Scoping, acceptance criteria, prioritization
 ├── skills/                     # Reusable workflows
 │   ├── review.md               # Code review (/run_review)
 │   ├── commit-helper.md        # Conventional commit messages (/run_commit)
@@ -152,6 +158,7 @@ dotai init ~/other-project
 │   ├── investigate.md          # Root-cause analysis (/run_investigate)
 │   ├── scaffold.md             # Boilerplate generation (/run_scaffold)
 │   ├── verify.md               # Run tests, types, lint (/run_verify)
+│   ├── plan.md                 # Structured planning workflow (/run_plan)
 │   └── deploy/                 # Folder-based skill (with scripts & assets)
 │       ├── main.md
 │       ├── scripts/
@@ -200,6 +207,7 @@ All skill triggers use the `run_` prefix to avoid collisions with built-in agent
 | Investigate | `/run_investigate` | Systematic root-cause analysis |
 | Scaffold | `/run_scaffold` | Generate boilerplate from patterns |
 | Verify | `/run_verify` | Run tests, types, lint, build |
+| Plan | `/run_plan` | Structured planning before coding |
 
 ### Skill Format
 
@@ -293,9 +301,12 @@ Skills reference roles by ID — when a skill runs, the role's full persona is i
 Skills and roles can be composed inline. Pass `as <role>` to run any skill with a specific persona:
 
 ```
+/run_plan as product-manager         # Scope a feature with acceptance criteria
+/run_plan as systems-architect      # Architecture deep-dive with tradeoffs
 /run_review as paranoid-reviewer    # Security-focused code review
-/run_review as qa                   # QA-focused code review
+/run_review as security-engineer    # Full OWASP-style security audit
 /run_techdebt as debugger           # Hunt tech debt with a debugger's mindset
+/run_review as mentor               # Review that teaches, not just critiques
 /run_review                         # Uses the skill's default role, or none
 ```
 

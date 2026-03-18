@@ -9,6 +9,13 @@ tags: review, quality, pr
 
 Analyze the current branch's diff against the base branch for structural issues that tests don't catch.
 
+## Gotchas
+
+- Large diffs (>500 lines) should be split into per-file reviews — reviewing everything at once causes missed issues
+- Always verify the base branch before diffing — stale base branches produce phantom findings
+- Renamed/moved files show as delete+add in diffs — don't flag these as "missing" code
+- Generated files (lockfiles, compiled output, migrations) should be skimmed, not reviewed line-by-line
+
 ## Inputs
 
 - `target` (optional): Specific files, "staged" for staged changes, or omit for branch diff (default: branch diff)
