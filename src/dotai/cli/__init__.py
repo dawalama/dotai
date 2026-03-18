@@ -122,3 +122,4 @@ from . import roles_cmd   # noqa: E402, F401
 from . import skills_cmd  # noqa: E402, F401
 from . import rules_cmd   # noqa: E402, F401
 from . import sync_cmd    # noqa: E402, F401
+from . import watch_cmd   # noqa: E402, F401

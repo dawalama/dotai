@@ -52,6 +52,9 @@ This generates agent config files in your project root — `CLAUDE.md`, `.cursor
 cd ~/my-project
 dotai sync
 
+# Or leave it running — auto-resyncs when you edit ~/.ai/ files
+dotai watch
+
 # Now open your editor — Claude Code, Cursor, Gemini, etc.
 # Your roles, skills, and rules are already loaded.
 ```
@@ -70,6 +73,7 @@ After `dotai sync`, skills appear as native slash commands:
 > /run_techdebt                        # Scan for tech debt
 > /run_careful                         # Enter production-safety mode
 > /run_verify                          # Run tests, types, lint, build
+> /run_learn                           # Capture a mistake as a permanent rule
 ```
 
 ### Using skills outside Claude Code
@@ -95,12 +99,17 @@ dotai learn "auth-header" \
   --issue "Forgot Bearer prefix on API token" \
   --correction "Always prepend 'Bearer ' to auth tokens"
 
+# Or let the agent do it — /run_learn reviews the session and proposes a rule
+> /run_learn
+
 # Import a detailed rule from a file
 dotai learn "no-useEffect" --from-file react-rules.md --globs "*.tsx,*.ts"
 
 # Disable a rule for one legacy project
 dotai toggle no-useeffect --off --project legacy-app
 ```
+
+The feedback loop: **vibe-code → agent makes mistake → `/run_learn` → rule created → next sync → agent never repeats it.** Your agent gets smarter every session.
 
 ### Searching your knowledge
 
@@ -159,6 +168,7 @@ dotai init ~/other-project
 │   ├── scaffold.md             # Boilerplate generation (/run_scaffold)
 │   ├── verify.md               # Run tests, types, lint (/run_verify)
 │   ├── plan.md                 # Structured planning workflow (/run_plan)
+│   ├── learn.md                # Capture learnings as rules (/run_learn)
 │   └── deploy/                 # Folder-based skill (with scripts & assets)
 │       ├── main.md
 │       ├── scripts/
@@ -208,6 +218,7 @@ All skill triggers use the `run_` prefix to avoid collisions with built-in agent
 | Scaffold | `/run_scaffold` | Generate boilerplate from patterns |
 | Verify | `/run_verify` | Run tests, types, lint, build |
 | Plan | `/run_plan` | Structured planning before coding |
+| Learn | `/run_learn` | Capture mistakes as permanent rules |
 
 ### Skill Format
 
@@ -432,6 +443,7 @@ dotai learn "title" --from-file <f>    # Import structured rule from a file
 dotai learn "title" -i "..." -c "..."  # Record an inline learning
 dotai install <source> [-s skill]      # Install skills from git repo or local path
 dotai new-skill <name> [-t trigger]    # Create a new skill from template
+dotai watch [path] [--agents ...]       # Auto-resync on ~/.ai/ changes
 dotai search "query" [--type t] [--tag] # Search knowledge index
 dotai index [--refresh]                # Build/show knowledge index
 dotai tree                             # Show knowledge tree
