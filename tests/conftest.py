@@ -131,3 +131,37 @@ Use a proper logging library instead.
     path = ai_dir / "rules" / "no-console-log.md"
     path.write_text(content)
     return path
+
+
+@pytest.fixture
+def claude_native_skill_file(tmp_path):
+    """Write a Claude-native SKILL.md and return its path."""
+    content = """\
+---
+name: Example Claude Skill
+description: An example skill in Claude-native format
+version: 1.0.0
+compatibility: claude-3, claude-4
+license: MIT
+---
+
+This skill does something useful with Claude.
+
+## Parameters
+
+- `input` (required): The input to process
+- `format` (optional): Output format
+
+## Usage
+
+- Basic usage: `example-skill input.txt`
+- With format: `example-skill input.txt --format json`
+
+## Caveats
+
+- Only works with text files
+- Large files may be slow
+"""
+    path = tmp_path / "SKILL.md"
+    path.write_text(content)
+    return path

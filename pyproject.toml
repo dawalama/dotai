@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dotai"
-version = "0.1.0"
+version = "0.1.1"
 description = "Universal AI context for any coding agent. Roles, skills, and rules in ~/.ai/"
 readme = "README.md"
 license = "MIT"

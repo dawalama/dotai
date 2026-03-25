@@ -7,7 +7,23 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from .. import __version__
+
+
+def _version_callback(value: bool):
+    if value:
+        print(f"dotai {__version__}")
+        raise typer.Exit()
+
+
 app = typer.Typer(help="Universal AI context for any coding agent.", no_args_is_help=True)
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(False, "--version", "-V", callback=_version_callback, is_eager=True, help="Show version and exit"),
+):
+    pass
 console = Console()
 
 SEED_DIR = Path(__file__).parent.parent / "seed"

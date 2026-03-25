@@ -403,18 +403,65 @@ For Claude Code, `dotai sync` also generates `.claude/skills/<trigger>/SKILL.md`
 
 ## Installing Skills
 
-Install skills from git repos or local directories:
+Install skills from git repos or local directories. Claude-native `SKILL.md` files are auto-detected and converted to dotai format with triggers and categories inferred from the content.
 
 ```bash
-# From a git repository
-dotai install https://github.com/user/ai-skills
+# Install from a GitHub repo — auto-detects and converts Claude-native skills
+dotai install https://github.com/slavingia/skills
+
+# Install a specific skill from a repo
 dotai install https://github.com/user/ai-skills -s deploy
 
-# From a local directory
+# Install from a local directory
 dotai install ~/my-skills/review
 
-# Install to a specific project
+# Install to a specific project instead of global
 dotai install https://github.com/team/skills -p my-project
+```
+
+After install, run `dotai sync` to make them available as slash commands in Claude Code, Gemini, etc.
+
+### Converting Claude-native skills
+
+If you have a Claude-native `SKILL.md` and want to convert it manually:
+
+```bash
+# Preview what would be converted
+dotai convert /path/to/SKILL.md --dry-run
+
+# Convert to global skills
+dotai convert /path/to/SKILL.md
+
+# Convert to a specific project
+dotai convert /path/to/SKILL.md -p my-project
+
+# Convert to a custom directory
+dotai convert /path/to/skill-dir/ -o ~/my-skills/
+```
+
+The converter maps Claude-native fields (`compatibility`, `license`) to dotai format, auto-generates a `/run_*` trigger, and infers a category from the skill's name and description.
+
+### Removing skills
+
+```bash
+# Remove a skill by name (will ask for confirmation)
+dotai remove mvp
+
+# Remove without confirmation
+dotai remove mvp --force
+
+# Remove from a specific project
+dotai remove mvp -p my-project
+```
+
+### Tracking sources
+
+Installed skills remember where they came from. Use `dotai skills` to see the source column:
+
+```bash
+dotai skills
+# Shows: Name, Trigger, Category, Role, Scope, Source, Description
+# Source shows "slavingia/skills" for GitHub imports, path for local installs
 ```
 
 ## Creating Skills
@@ -442,6 +489,8 @@ dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-pr
 dotai learn "title" --from-file <f>    # Import structured rule from a file
 dotai learn "title" -i "..." -c "..."  # Record an inline learning
 dotai install <source> [-s skill]      # Install skills from git repo or local path
+dotai remove <skill> [-p project]     # Remove an installed skill
+dotai convert <path> [--dry-run]      # Convert Claude-native SKILL.md to dotai format
 dotai new-skill <name> [-t trigger]    # Create a new skill from template
 dotai watch [path] [--agents ...]       # Auto-resync on ~/.ai/ changes
 dotai search "query" [--type t] [--tag] # Search knowledge index

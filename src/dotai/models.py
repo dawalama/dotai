@@ -124,6 +124,7 @@ class Skill(BaseModel):
     assets_dir: Path | None = Field(None, description="Directory containing scripts/assets for folder-based skills")
     config: dict = Field(default_factory=dict, description="User-specific configuration from config.json")
     scope: str = "global"  # "global" or project name
+    source: str = ""  # Where this skill was installed from (git URL, local path, or "seed")
     raw_body: str = ""  # Full markdown body for runbook-style skills
 
     @property

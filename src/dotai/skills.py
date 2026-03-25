@@ -78,6 +78,39 @@ def _load_skill_config(skill_dir: Path) -> dict:
     return {}
 
 
+SOURCES_FILE = ".dotai-sources.json"
+
+
+def load_sources(skills_dir: Path) -> dict[str, dict]:
+    """Load the source manifest for a skills directory.
+
+    Returns a dict mapping skill filename/dirname to source info:
+      {"mvp.md": {"url": "https://...", "type": "git"}, ...}
+    """
+    path = skills_dir / SOURCES_FILE
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_sources(skills_dir: Path, sources: dict[str, dict]) -> None:
+    """Save the source manifest."""
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    path = skills_dir / SOURCES_FILE
+    path.write_text(json.dumps(sources, indent=2) + "\n")
+
+
+def record_source(skills_dir: Path, skill_key: str, source_url: str,
+                  source_type: str = "git") -> None:
+    """Record where a skill was installed from."""
+    sources = load_sources(skills_dir)
+    sources[skill_key] = {"url": source_url, "type": source_type}
+    save_sources(skills_dir, sources)
+
+
 def parse_skill_file(file_path: Path, scope: str = "global",
                      assets_dir: Path | None = None,
                      skill_config: dict | None = None) -> Skill | None:
@@ -218,10 +251,14 @@ def load_skills_from_dir(skills_dir: Path, scope: str = "global") -> list[Skill]
     if not skills_dir.exists():
         return skills
 
+    sources = load_sources(skills_dir)
+
     # Single-file skills
     for md_file in sorted(skills_dir.glob("*.md")):
         skill = parse_skill_file(md_file, scope)
         if skill:
+            src = sources.get(md_file.name, {})
+            skill.source = src.get("url", "")
             skills.append(skill)
 
     # Folder-based skills (directories with main.md)
@@ -235,6 +272,8 @@ def load_skills_from_dir(skills_dir: Path, scope: str = "global") -> list[Skill]
                 skill_config=skill_config,
             )
             if skill:
+                src = sources.get(item.name, {})
+                skill.source = src.get("url", "")
                 skills.append(skill)
 
     return skills
