@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dotai"
+name = "dot-ai"
 version = "0.1.1"
 description = "Universal AI context for any coding agent. Roles, skills, and rules in ~/.ai/"
 readme = "README.md"

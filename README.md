@@ -28,13 +28,13 @@ Your knowledge about how to write code, review it, ship it, and debug it gets sc
 ### From PyPI (recommended)
 
 ```bash
-pip install dotai
+pip install dot-ai
 ```
 
 ### With pipx (isolated install)
 
 ```bash
-pipx install dotai
+pipx install dot-ai
 ```
 
 ### From source
