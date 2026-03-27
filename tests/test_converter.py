@@ -1,13 +1,19 @@
-"""Tests for the Claude-native to dotai skill converter."""
+"""Tests for the multi-ecosystem skill converter."""
 
+import json
 import pytest
 from pathlib import Path
 
 from dotai.converter import (
     detect_skill_format,
     parse_claude_skill_md,
+    parse_plugin_manifest,
+    convert_plugin_to_dotai,
     _detect_structure_in_body,
     _infer_category,
+    _convert_gemini_command,
+    _convert_agent_to_role,
+    _convert_cursor_rule,
     convert_claude_to_dotai,
     convert_skill_file,
 )
@@ -407,3 +413,416 @@ class TestConvertSkillFile:
         assert result.is_dir()
         assert (result / "main.md").exists()
         assert (result / "config.json").exists()
+
+
+# --- Plugin / Extension Fixtures ---
+
+@pytest.fixture
+def claude_plugin(tmp_path):
+    """A Claude Code plugin directory."""
+    plugin = tmp_path / "my-claude-plugin"
+    plugin.mkdir()
+
+    # Manifest
+    cp_dir = plugin / ".claude-plugin"
+    cp_dir.mkdir()
+    (cp_dir / "plugin.json").write_text(json.dumps({
+        "name": "code-review",
+        "description": "Code review tools",
+        "author": {"name": "Test Author", "email": "test@example.com"},
+    }))
+
+    # A skill
+    skill_dir = plugin / "skills" / "review-code"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("""\
+---
+name: review-code
+description: Review code for structural issues
+allowed-tools: [Read, Glob, Grep, Bash]
+---
+
+# Code Reviewer
+
+## Workflow
+1. Read the diff
+2. Identify issues
+3. Report findings
+""")
+
+    # A command (legacy)
+    cmd_dir = plugin / "commands"
+    cmd_dir.mkdir()
+    (cmd_dir / "quick-fix.md").write_text("""\
+---
+description: Apply a quick fix
+allowed-tools: [Read, Edit]
+---
+
+Fix the issue described by the user. Read the error, find the cause, apply the fix.
+""")
+
+    # An agent
+    agents_dir = plugin / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "researcher.md").write_text("""\
+---
+name: researcher
+description: Research agent for gathering context
+tools: Glob, Grep, Read, WebFetch
+model: sonnet
+---
+
+You are a research agent. Your job is to gather context and information.
+Search broadly, read carefully, and summarize findings.
+""")
+
+    # Hooks (non-convertible)
+    hooks_dir = plugin / "hooks"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text("{}")
+
+    return plugin
+
+
+@pytest.fixture
+def cursor_plugin(tmp_path):
+    """A Cursor plugin directory."""
+    plugin = tmp_path / "my-cursor-plugin"
+    plugin.mkdir()
+
+    # Manifest
+    cp_dir = plugin / ".cursor-plugin"
+    cp_dir.mkdir()
+    (cp_dir / "plugin.json").write_text(json.dumps({
+        "name": "typescript-tools",
+        "description": "TypeScript development tools",
+        "version": "1.0.0",
+        "author": {"name": "Cursor Dev"},
+    }))
+
+    # A skill
+    skill_dir = plugin / "skills" / "ts-migrate"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("""\
+---
+name: ts-migrate
+description: Migrate JavaScript files to TypeScript
+---
+
+# TypeScript Migration
+
+## Steps
+1. Find .js files
+2. Rename to .ts/.tsx
+3. Add type annotations
+4. Fix type errors
+""")
+
+    # A .mdc rule
+    rules_dir = plugin / "rules"
+    rules_dir.mkdir()
+    (rules_dir / "typescript-strict.mdc").write_text("""\
+---
+description: Enforce strict TypeScript conventions
+globs: **/*.ts,**/*.tsx
+alwaysApply: false
+---
+
+# TypeScript Strict Mode
+
+- Always use explicit return types on exported functions
+- Prefer `interface` over `type` for object shapes
+- Never use `any` — use `unknown` instead
+""")
+
+    return plugin
+
+
+@pytest.fixture
+def gemini_extension(tmp_path):
+    """A Gemini CLI extension directory."""
+    ext = tmp_path / "my-gemini-ext"
+    ext.mkdir()
+
+    # Manifest
+    (ext / "gemini-extension.json").write_text(json.dumps({
+        "name": "git-helper",
+        "version": "1.0.0",
+        "description": "Git workflow helpers",
+        "mcpServers": {
+            "git-server": {
+                "command": "node",
+                "args": ["server.js"],
+            }
+        },
+    }))
+
+    # A skill
+    skill_dir = ext / "skills" / "commit-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("""\
+---
+name: commit-helper
+description: Generate conventional commit messages from staged changes
+---
+
+# Commit Helper
+
+Review staged changes and generate a conventional commit message.
+
+## Steps
+1. Run git diff --cached
+2. Analyze the changes
+3. Generate commit message
+""")
+
+    # A TOML command
+    cmd_dir = ext / "commands" / "git"
+    cmd_dir.mkdir(parents=True)
+    (cmd_dir / "commit.toml").write_text('''\
+description = "Generate a commit message from staged changes"
+prompt = """
+Generate a Conventional Commit message based on this diff:
+
+```diff
+!{git diff --staged}
+```
+
+Use the format: type(scope): description
+"""
+''')
+
+    # Another TOML command at top level
+    cmd_top = ext / "commands"
+    (cmd_top / "status.toml").write_text('''\
+description = "Show project status summary"
+prompt = """
+Summarize the current state of this project:
+
+```
+!{git status}
+```
+
+```
+!{git log --oneline -5}
+```
+"""
+''')
+
+    return ext
+
+
+# --- detect_skill_format for plugins ---
+
+class TestDetectPluginFormat:
+    def test_detects_claude_plugin(self, claude_plugin):
+        assert detect_skill_format(claude_plugin) == "claude-plugin"
+
+    def test_detects_cursor_plugin(self, cursor_plugin):
+        assert detect_skill_format(cursor_plugin) == "cursor-plugin"
+
+    def test_detects_gemini_extension(self, gemini_extension):
+        assert detect_skill_format(gemini_extension) == "gemini-extension"
+
+    def test_plugin_detection_takes_priority_over_skill(self, tmp_path):
+        """A directory with both plugin.json and SKILL.md should detect as plugin."""
+        plugin = tmp_path / "hybrid"
+        plugin.mkdir()
+        (plugin / ".claude-plugin").mkdir()
+        (plugin / ".claude-plugin" / "plugin.json").write_text('{"name": "test"}')
+        (plugin / "SKILL.md").write_text("---\nname: test\n---\nStuff\n")
+        assert detect_skill_format(plugin) == "claude-plugin"
+
+
+# --- parse_plugin_manifest ---
+
+class TestParsePluginManifest:
+    def test_parses_claude_plugin(self, claude_plugin):
+        result = parse_plugin_manifest(claude_plugin)
+        assert result["format"] == "claude-plugin"
+        assert result["name"] == "code-review"
+        assert result["description"] == "Code review tools"
+        assert result["author"] == "Test Author"
+        assert len(result["skills"]) == 1
+        assert len(result["commands"]) == 1
+        assert len(result["agents"]) == 1
+        assert result["has_hooks"] is True
+
+    def test_parses_cursor_plugin(self, cursor_plugin):
+        result = parse_plugin_manifest(cursor_plugin)
+        assert result["format"] == "cursor-plugin"
+        assert result["name"] == "typescript-tools"
+        assert len(result["skills"]) == 1
+        assert len(result["rules"]) == 1
+
+    def test_parses_gemini_extension(self, gemini_extension):
+        result = parse_plugin_manifest(gemini_extension)
+        assert result["format"] == "gemini-extension"
+        assert result["name"] == "git-helper"
+        assert len(result["skills"]) == 1
+        assert len(result["commands"]) == 2
+        assert result["has_mcp"] is True
+
+    def test_unknown_dir_returns_empty(self, tmp_path):
+        result = parse_plugin_manifest(tmp_path)
+        assert result["format"] == "unknown"
+        assert result["skills"] == []
+
+    def test_string_author_field(self, tmp_path):
+        plugin = tmp_path / "p"
+        plugin.mkdir()
+        (plugin / ".claude-plugin").mkdir()
+        (plugin / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "test", "author": "Just a string"})
+        )
+        result = parse_plugin_manifest(plugin)
+        assert result["author"] == "Just a string"
+
+
+# --- convert_plugin_to_dotai ---
+
+class TestConvertPluginToDotai:
+    def test_converts_claude_plugin_skills(self, claude_plugin, tmp_path):
+        dest = tmp_path / "output"
+        results = convert_plugin_to_dotai(claude_plugin, dest)
+        # Should convert the skill + the command
+        assert len(results) == 2
+        # Check that skill was converted
+        skill_files = list(dest.glob("*.md"))
+        assert len(skill_files) >= 1
+        # Verify content of converted skill
+        contents = [f.read_text() for f in skill_files]
+        all_content = "\n".join(contents)
+        assert "review-code" in all_content or "review" in all_content
+
+    def test_converts_cursor_plugin_skills(self, cursor_plugin, tmp_path):
+        dest = tmp_path / "output"
+        results = convert_plugin_to_dotai(cursor_plugin, dest)
+        assert len(results) >= 1
+        # Verify the skill was converted
+        all_content = "\n".join(f.read_text() for f in results if f.exists() and f.is_file())
+        assert "ts-migrate" in all_content or "migrate" in all_content
+
+    def test_converts_gemini_extension_skills_and_commands(self, gemini_extension, tmp_path):
+        dest = tmp_path / "output"
+        results = convert_plugin_to_dotai(gemini_extension, dest)
+        # 1 skill + 2 toml commands
+        assert len(results) == 3
+
+    def test_skill_filter(self, claude_plugin, tmp_path):
+        dest = tmp_path / "output"
+        results = convert_plugin_to_dotai(claude_plugin, dest, skill_filter="review-code")
+        assert len(results) == 1
+
+    def test_include_agents(self, claude_plugin, tmp_path):
+        dest = tmp_path / "output" / "skills"
+        dest.mkdir(parents=True)
+        results = convert_plugin_to_dotai(claude_plugin, dest, include_agents=True)
+        # skills (1) + commands (1) + agents (1) = 3
+        assert len(results) == 3
+        # Check role was created
+        roles_dir = dest.parent / "roles"
+        assert roles_dir.exists()
+        role_files = list(roles_dir.glob("*.md"))
+        assert len(role_files) == 1
+        assert "researcher" in role_files[0].read_text().lower()
+
+    def test_include_rules(self, cursor_plugin, tmp_path):
+        dest = tmp_path / "output" / "skills"
+        dest.mkdir(parents=True)
+        results = convert_plugin_to_dotai(cursor_plugin, dest, include_rules=True)
+        # 1 skill + 1 rule
+        assert len(results) == 2
+        rules_dir = dest.parent / "rules"
+        assert rules_dir.exists()
+        rule_files = list(rules_dir.glob("*.md"))
+        assert len(rule_files) == 1
+        content = rule_files[0].read_text()
+        assert "TypeScript" in content or "typescript" in content
+
+
+# --- _convert_gemini_command ---
+
+class TestConvertGeminiCommand:
+    def test_converts_toml_command(self, gemini_extension, tmp_path):
+        cmd = gemini_extension / "commands" / "git" / "commit.toml"
+        dest = tmp_path / "output"
+        result = _convert_gemini_command(cmd, dest)
+        assert result is not None
+        assert result.exists()
+        content = result.read_text()
+        assert "trigger: /run_" in content
+        assert "git diff --staged" in content
+        assert "category:" in content
+
+    def test_notes_template_variables(self, gemini_extension, tmp_path):
+        cmd = gemini_extension / "commands" / "git" / "commit.toml"
+        dest = tmp_path / "output"
+        result = _convert_gemini_command(cmd, dest)
+        content = result.read_text()
+        # Should note the !{} template syntax
+        assert "!{command}" in content
+
+    def test_returns_none_for_invalid_toml(self, tmp_path):
+        bad = tmp_path / "bad.toml"
+        bad.write_text("this is not valid {{{ toml")
+        result = _convert_gemini_command(bad, tmp_path / "out")
+        assert result is None
+
+
+# --- _convert_agent_to_role ---
+
+class TestConvertAgentToRole:
+    def test_converts_agent_md(self, claude_plugin, tmp_path):
+        agent = claude_plugin / "agents" / "researcher.md"
+        dest = tmp_path / "roles"
+        result = _convert_agent_to_role(agent, dest)
+        assert result is not None
+        assert result.exists()
+        content = result.read_text()
+        assert "name: researcher" in content
+        assert "research agent" in content.lower()
+
+    def test_role_has_tags(self, claude_plugin, tmp_path):
+        agent = claude_plugin / "agents" / "researcher.md"
+        dest = tmp_path / "roles"
+        result = _convert_agent_to_role(agent, dest)
+        content = result.read_text()
+        assert "imported" in content
+
+
+# --- _convert_cursor_rule ---
+
+class TestConvertCursorRule:
+    def test_converts_mdc_rule(self, cursor_plugin, tmp_path):
+        rule = cursor_plugin / "rules" / "typescript-strict.mdc"
+        dest = tmp_path / "rules"
+        result = _convert_cursor_rule(rule, dest)
+        assert result is not None
+        assert result.exists()
+        content = result.read_text()
+        assert "description:" in content
+        assert "globs:" in content
+        assert "**.ts" in content or "**/*.ts" in content
+
+    def test_rule_has_cursor_tag(self, cursor_plugin, tmp_path):
+        rule = cursor_plugin / "rules" / "typescript-strict.mdc"
+        dest = tmp_path / "rules"
+        result = _convert_cursor_rule(rule, dest)
+        content = result.read_text()
+        assert "cursor" in content
+
+
+# --- convert_skill_file with plugins ---
+
+class TestConvertSkillFilePlugin:
+    def test_routes_claude_plugin(self, claude_plugin, tmp_path):
+        dest = tmp_path / "output"
+        result = convert_skill_file(claude_plugin, dest)
+        assert result.exists()
+
+    def test_routes_gemini_extension(self, gemini_extension, tmp_path):
+        dest = tmp_path / "output"
+        result = convert_skill_file(gemini_extension, dest)
+        assert result.exists()

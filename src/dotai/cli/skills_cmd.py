@@ -189,21 +189,28 @@ def install(
             console.print(f"[red]Failed to install: {e}[/red]")
             raise typer.Exit(1)
 
-    # Auto-detect and convert Claude-native skills
-    from ..converter import detect_skill_format, convert_claude_to_dotai
+    # Auto-detect and convert skills from various formats
+    from ..converter import detect_skill_format, convert_claude_to_dotai, convert_plugin_to_dotai
     from ..skills import record_source
 
     # Determine source label for tracking
     source_label = source if not source_path.exists() else str(source_path)
     source_type = "local" if source_path.exists() else "git"
 
-    # Check if we just installed Claude-native skill(s)
+    # Check if we just installed a plugin/extension or Claude-native skill(s)
     installed_path = dest_dir / (skill_name or source_path.name) if source_path.exists() else dest
     converted_files: list[Path] = []
 
     if installed_path.exists():
         fmt = detect_skill_format(installed_path)
-        if fmt == "claude-native":
+        if fmt in ("claude-plugin", "cursor-plugin", "gemini-extension"):
+            fmt_label = fmt.replace("-", " ").title()
+            console.print(f"  [yellow]Detected {fmt_label} format, converting...[/yellow]")
+            results = convert_plugin_to_dotai(installed_path, dest_dir)
+            converted_files.extend(results)
+            source_type = fmt
+            console.print(f"  [green]Converted {len(results)} skill(s) to dotai format[/green]")
+        elif fmt == "claude-native":
             console.print(f"  [yellow]Detected Claude-native format, converting...[/yellow]")
             result = convert_claude_to_dotai(installed_path, dest_dir)
             converted_files.append(result)
@@ -446,3 +453,118 @@ def new_skill(
         console.print(f"[green]Created skill:[/green] {dest}")
 
     console.print(f"  Edit the skill to customize its behavior.")
+
+
+@app.command()
+def import_plugin(
+    source: str = typer.Argument(..., help="Path or git URL to a Claude plugin, Cursor plugin, or Gemini extension"),
+    skill_name: Optional[str] = typer.Option(None, "--skill", "-s", help="Import only a specific skill by name"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Install to a project instead of global"),
+    include_agents: bool = typer.Option(False, "--include-agents", help="Also convert agents to dotai roles"),
+    include_rules: bool = typer.Option(False, "--include-rules", help="Also convert Cursor .mdc rules to dotai rules"),
+):
+    """Import skills from a Claude plugin, Cursor plugin, or Gemini extension.
+
+    Detects the plugin format automatically and converts all skills to dotai format.
+    Also supports importing agents (as roles) and Cursor rules.
+
+    Examples:
+      dotai import-plugin /path/to/claude-plugin/
+      dotai import-plugin /path/to/cursor-plugin/ --include-rules
+      dotai import-plugin /path/to/gemini-extension/ -s my-skill
+      dotai import-plugin https://github.com/user/claude-plugin
+    """
+    import shutil
+    from ..converter import (
+        detect_skill_format, convert_plugin_to_dotai, parse_plugin_manifest,
+    )
+    from ..skills import record_source
+    from ..store import load_config
+
+    config = load_config()
+
+    if project:
+        proj = config.get_project(project)
+        if not proj:
+            console.print(f"[red]Project '{project}' not found[/red]")
+            raise typer.Exit(1)
+        dest_dir = proj.skills_path
+    else:
+        dest_dir = config.global_skills_path
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve source: local path or git repo
+    source_path = Path(source).expanduser().resolve()
+    plugin_path: Path
+
+    if source_path.exists():
+        plugin_path = source_path
+        source_label = str(source_path)
+    else:
+        # Git clone
+        import subprocess
+        import tempfile
+
+        console.print(f"  [dim]Cloning {source}...[/dim]")
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", source, str(tmp / "repo")],
+                check=True, capture_output=True,
+            )
+            plugin_path = tmp / "repo"
+            source_label = source
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Failed to clone: {e.stderr.decode()[:200]}[/red]")
+            raise typer.Exit(1)
+
+    # Detect format
+    fmt = detect_skill_format(plugin_path)
+    if fmt not in ("claude-plugin", "cursor-plugin", "gemini-extension"):
+        console.print(f"[red]Not a recognized plugin/extension format: {plugin_path}[/red]")
+        console.print("  Expected one of:")
+        console.print("    - .claude-plugin/plugin.json (Claude plugin)")
+        console.print("    - .cursor-plugin/plugin.json (Cursor plugin)")
+        console.print("    - gemini-extension.json (Gemini extension)")
+        raise typer.Exit(1)
+
+    # Show what we found
+    manifest = parse_plugin_manifest(plugin_path)
+    fmt_label = fmt.replace("-", " ").title()
+    console.print(f"  [bold]{fmt_label}:[/bold] {manifest['name']}")
+    if manifest["description"]:
+        console.print(f"  [dim]{manifest['description'][:80]}[/dim]")
+    console.print(f"  Skills: {len(manifest['skills'])}, Commands: {len(manifest['commands'])}, "
+                  f"Agents: {len(manifest['agents'])}, Rules: {len(manifest['rules'])}")
+
+    if manifest["has_hooks"]:
+        console.print(f"  [yellow]Note: hooks found but cannot be converted to dotai[/yellow]")
+    if manifest["has_mcp"]:
+        console.print(f"  [yellow]Note: MCP server configs found but cannot be converted to dotai[/yellow]")
+
+    # Convert
+    results = convert_plugin_to_dotai(
+        plugin_path, dest_dir,
+        skill_filter=skill_name,
+        include_agents=include_agents,
+        include_rules=include_rules,
+    )
+
+    if not results:
+        console.print("[yellow]No skills found to import.[/yellow]")
+        raise typer.Exit(0)
+
+    # Record sources
+    for r in results:
+        record_source(dest_dir, r.name, source_label, fmt)
+
+    console.print(f"\n  [green]Imported {len(results)} item(s) to dotai format[/green]")
+    for r in results:
+        console.print(f"    {r}")
+
+    # Show total count
+    from ..skills import load_skills_from_dir
+    scope_label = f"project '{project}'" if project else "global"
+    installed = load_skills_from_dir(dest_dir)
+    console.print(f"\n  Total skills in {scope_label}: {len(installed)}")

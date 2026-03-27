@@ -23,12 +23,33 @@ Your knowledge about how to write code, review it, ship it, and debug it gets sc
 - **Agent sync** — Generate `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, or `AGENTS.md` from your `~/.ai/`
 - **Native slash commands** — For Claude Code, skills become real `/run_*` commands automatically
 
-## Quick Start
+## Installation
+
+### From PyPI (recommended)
 
 ```bash
 pip install dotai
+```
 
-# Initialize ~/.ai/ with seed roles and skills
+### With pipx (isolated install)
+
+```bash
+pipx install dotai
+```
+
+### From source
+
+```bash
+git clone https://github.com/dawalama/dotai.git
+cd dotai
+pip install -e ".[dev]"
+```
+
+Requires Python 3.11 or later.
+
+## Quick Start
+
+```bash
 dotai init
 
 # See what's available
@@ -441,6 +462,38 @@ dotai convert /path/to/skill-dir/ -o ~/my-skills/
 
 The converter maps Claude-native fields (`compatibility`, `license`) to dotai format, auto-generates a `/run_*` trigger, and infers a category from the skill's name and description.
 
+### Importing from plugin ecosystems
+
+dotai can import skills from **Claude plugins**, **Cursor plugins**, and **Gemini extensions** — converting them into universal dotai format so they work across all tools.
+
+```bash
+# Import from a Claude Code plugin
+dotai import-plugin /path/to/claude-plugin/
+dotai import-plugin https://github.com/user/claude-plugin
+
+# Import from a Cursor plugin
+dotai import-plugin /path/to/cursor-plugin/
+
+# Import from a Gemini CLI extension
+dotai import-plugin /path/to/gemini-extension/
+
+# Import only a specific skill from a plugin
+dotai import-plugin /path/to/plugin/ -s review-code
+
+# Also convert agents to dotai roles
+dotai import-plugin /path/to/plugin/ --include-agents
+
+# Also convert Cursor .mdc rules to dotai rules
+dotai import-plugin /path/to/cursor-plugin/ --include-rules
+```
+
+Supported plugin formats:
+- **Claude plugins** — directories with `.claude-plugin/plugin.json`
+- **Cursor plugins** — directories with `.cursor-plugin/plugin.json`
+- **Gemini extensions** — directories with `gemini-extension.json`
+
+The importer discovers skills, commands, agents, and rules within the plugin and converts each to dotai format. Hooks and MCP server configs are noted but not converted (they're tool-specific).
+
 ### Removing skills
 
 ```bash
@@ -489,6 +542,7 @@ dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-pr
 dotai learn "title" --from-file <f>    # Import structured rule from a file
 dotai learn "title" -i "..." -c "..."  # Record an inline learning
 dotai install <source> [-s skill]      # Install skills from git repo or local path
+dotai import-plugin <source>          # Import from Claude/Cursor/Gemini plugin
 dotai remove <skill> [-p project]     # Remove an installed skill
 dotai convert <path> [--dry-run]      # Convert Claude-native SKILL.md to dotai format
 dotai new-skill <name> [-t trigger]    # Create a new skill from template

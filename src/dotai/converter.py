@@ -1,13 +1,20 @@
-"""Convert Claude-native SKILL.md files to dotai format.
+"""Convert skills from multiple ecosystems to dotai format.
 
-Claude-native skills use a different frontmatter schema (compatibility, license,
-scripts/) while dotai skills use trigger, category, allowed-tools, etc.
+Supports:
+- Claude-native SKILL.md (standalone skills)
+- Claude Code plugins (.claude-plugin/plugin.json)
+- Cursor plugins (.cursor-plugin/plugin.json)
+- Gemini CLI extensions (gemini-extension.json)
 
-This module detects the format and converts between them.
+Each ecosystem uses slightly different metadata, but all share a SKILL.md
+convention with YAML frontmatter. This module detects, parses, and converts
+them all into the universal dotai format.
 """
 
+import json
 import re
 import shutil
+import tomllib
 from pathlib import Path
 
 from .models import SkillCategory
@@ -87,15 +94,23 @@ _CATEGORY_KEYWORDS: dict[str, SkillCategory] = {
 
 
 def detect_skill_format(path: Path) -> str:
-    """Detect whether a file is dotai, claude-native, or unknown format.
+    """Detect whether a path is dotai, claude-native, a plugin, or unknown.
 
-    Returns: "dotai", "claude-native", or "unknown"
+    Returns one of:
+      "dotai", "claude-native", "claude-plugin", "cursor-plugin",
+      "gemini-extension", or "unknown"
     """
     if not path.exists():
         return "unknown"
 
-    # If it's a directory, check for SKILL.md (claude-native) or main.md (dotai)
+    # Plugin/extension directory detection (checked first)
     if path.is_dir():
+        if (path / ".claude-plugin" / "plugin.json").exists():
+            return "claude-plugin"
+        if (path / ".cursor-plugin" / "plugin.json").exists():
+            return "cursor-plugin"
+        if (path / "gemini-extension.json").exists():
+            return "gemini-extension"
         if (path / "SKILL.md").exists():
             return "claude-native"
         if (path / "main.md").exists():
@@ -386,6 +401,7 @@ def convert_skill_file(source: Path, dest_dir: Path) -> Path:
 
     If the source is already dotai format, copies it unchanged.
     If claude-native, converts to dotai format.
+    If a plugin/extension, converts all skills within it.
     If unknown, copies as-is.
 
     Returns: Path to the destination file/directory
@@ -394,6 +410,9 @@ def convert_skill_file(source: Path, dest_dir: Path) -> Path:
 
     if fmt == "claude-native":
         return convert_claude_to_dotai(source, dest_dir)
+    elif fmt in ("claude-plugin", "cursor-plugin", "gemini-extension"):
+        results = convert_plugin_to_dotai(source, dest_dir)
+        return results[0] if results else dest_dir
     else:
         # Copy as-is (dotai or unknown)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -407,6 +426,292 @@ def convert_skill_file(source: Path, dest_dir: Path) -> Path:
             dest = dest_dir / source.name
             shutil.copy2(source, dest)
             return dest
+
+
+# --- Plugin / extension support ---
+
+def parse_plugin_manifest(path: Path) -> dict:
+    """Parse a plugin/extension directory and return normalized metadata.
+
+    Works with Claude plugins, Cursor plugins, and Gemini extensions.
+
+    Returns dict with: format, name, description, author, skills (list of Paths),
+    commands (list of Paths), agents (list of Paths), rules (list of Paths),
+    has_hooks, has_mcp.
+    """
+    fmt = detect_skill_format(path)
+    manifest: dict = {}
+
+    if fmt == "claude-plugin":
+        manifest_path = path / ".claude-plugin" / "plugin.json"
+        manifest = json.loads(manifest_path.read_text())
+    elif fmt == "cursor-plugin":
+        manifest_path = path / ".cursor-plugin" / "plugin.json"
+        manifest = json.loads(manifest_path.read_text())
+    elif fmt == "gemini-extension":
+        manifest_path = path / "gemini-extension.json"
+        manifest = json.loads(manifest_path.read_text())
+    else:
+        return {"format": "unknown", "name": path.name, "description": "",
+                "author": "", "skills": [], "commands": [], "agents": [],
+                "rules": [], "has_hooks": False, "has_mcp": False}
+
+    # Normalize author
+    author_raw = manifest.get("author", {})
+    if isinstance(author_raw, dict):
+        author = author_raw.get("name", "")
+    else:
+        author = str(author_raw)
+
+    # Discover skills (all three use skills/*/SKILL.md)
+    skills: list[Path] = []
+    skills_dir = path / "skills"
+    if skills_dir.is_dir():
+        for sub in sorted(skills_dir.iterdir()):
+            if sub.is_dir() and (sub / "SKILL.md").exists():
+                skills.append(sub / "SKILL.md")
+
+    # Discover commands
+    commands: list[Path] = []
+    commands_dir = path / "commands"
+    if commands_dir.is_dir():
+        for f in sorted(commands_dir.rglob("*")):
+            if f.is_file() and f.suffix in (".md", ".toml"):
+                commands.append(f)
+
+    # Discover agents
+    agents: list[Path] = []
+    agents_dir = path / "agents"
+    if agents_dir.is_dir():
+        for f in sorted(agents_dir.glob("*.md")):
+            agents.append(f)
+
+    # Discover Cursor .mdc rules
+    rules: list[Path] = []
+    if fmt == "cursor-plugin":
+        rules_dir = path / "rules"
+        if rules_dir.is_dir():
+            for f in sorted(rules_dir.glob("*.mdc")):
+                rules.append(f)
+
+    # Check for hooks and MCP
+    has_hooks = (path / "hooks").is_dir()
+    has_mcp = (path / ".mcp.json").exists() or (path / "mcp.json").exists()
+    if fmt == "gemini-extension":
+        mcp_servers = manifest.get("mcpServers", {})
+        has_mcp = has_mcp or bool(mcp_servers)
+
+    return {
+        "format": fmt,
+        "name": manifest.get("name", path.name),
+        "description": manifest.get("description", ""),
+        "author": author,
+        "skills": skills,
+        "commands": commands,
+        "agents": agents,
+        "rules": rules,
+        "has_hooks": has_hooks,
+        "has_mcp": has_mcp,
+    }
+
+
+def convert_plugin_to_dotai(source: Path, dest_dir: Path,
+                            skill_filter: str | None = None,
+                            include_agents: bool = False,
+                            include_rules: bool = False) -> list[Path]:
+    """Convert a plugin/extension directory into dotai skills (and optionally roles/rules).
+
+    Args:
+        source: Path to the plugin/extension directory
+        dest_dir: Destination directory for converted skills
+        skill_filter: If set, only convert the skill with this name
+        include_agents: If True, also convert agents to dotai roles
+        include_rules: If True, also convert Cursor .mdc rules to dotai rules
+
+    Returns: List of paths to created files/directories
+    """
+    parsed = parse_plugin_manifest(source)
+    results: list[Path] = []
+    warnings: list[str] = []
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Convert skills
+    for skill_path in parsed["skills"]:
+        skill_dir = skill_path.parent
+        skill_name = skill_dir.name
+
+        if skill_filter and skill_name != skill_filter:
+            continue
+
+        result = convert_claude_to_dotai(skill_dir, dest_dir, skill_name)
+        results.append(result)
+
+    # Convert commands
+    for cmd_path in parsed["commands"]:
+        cmd_name = cmd_path.stem
+        if skill_filter and cmd_name != skill_filter:
+            continue
+
+        if cmd_path.suffix == ".toml":
+            result = _convert_gemini_command(cmd_path, dest_dir)
+            if result:
+                results.append(result)
+        elif cmd_path.suffix == ".md":
+            # Treat .md commands like claude-native skills
+            result = convert_claude_to_dotai(cmd_path, dest_dir, cmd_name)
+            results.append(result)
+
+    # Convert agents to roles
+    if include_agents and parsed["agents"]:
+        roles_dir = dest_dir.parent / "roles"
+        roles_dir.mkdir(parents=True, exist_ok=True)
+        for agent_path in parsed["agents"]:
+            result = _convert_agent_to_role(agent_path, roles_dir)
+            if result:
+                results.append(result)
+
+    # Convert Cursor .mdc rules
+    if include_rules and parsed["rules"]:
+        rules_dir = dest_dir.parent / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        for rule_path in parsed["rules"]:
+            result = _convert_cursor_rule(rule_path, rules_dir)
+            if result:
+                results.append(result)
+
+    # Warn about non-convertible artifacts
+    if parsed["has_hooks"]:
+        warnings.append("hooks (not convertible to dotai)")
+    if parsed["has_mcp"]:
+        warnings.append("MCP server configs (not convertible to dotai)")
+
+    return results
+
+
+def _convert_gemini_command(source: Path, dest_dir: Path) -> Path | None:
+    """Convert a Gemini CLI .toml command file to a dotai skill.
+
+    Gemini commands are TOML files with 'description' and 'prompt' fields,
+    plus template syntax: {{args}}, !{shell}, @{file}.
+    """
+    try:
+        data = tomllib.loads(source.read_text())
+    except Exception:
+        return None
+
+    prompt = data.get("prompt", "")
+    description = data.get("description", "")
+
+    # Derive name from file path (e.g. commands/git/commit.toml -> git-commit)
+    rel = source.relative_to(source.parent)
+    # Walk up to find commands/ root
+    parts = list(source.parts)
+    try:
+        cmd_idx = parts.index("commands")
+        name_parts = parts[cmd_idx + 1:]
+    except ValueError:
+        name_parts = [source.stem]
+
+    # Strip .toml extension from last part
+    name_parts[-1] = Path(name_parts[-1]).stem
+    name = "-".join(name_parts)
+    skill_id = generate_id(name)
+
+    # Note template variables in the body
+    body_lines = []
+    if "{{args}}" in prompt or "{{" in prompt:
+        body_lines.append("<!-- Note: {{args}} is replaced with user arguments -->")
+        body_lines.append("")
+    if "!{" in prompt:
+        body_lines.append("<!-- Note: !{command} blocks execute shell commands -->")
+        body_lines.append("")
+    if "@{" in prompt:
+        body_lines.append("<!-- Note: @{path} blocks inject file contents -->")
+        body_lines.append("")
+    body_lines.append(prompt)
+
+    category = _infer_category(name, description)
+
+    content = f"""---
+name: {name}
+trigger: /run_{skill_id}
+category: {category.value}
+# source-format: gemini-command
+---
+
+{description}
+
+{"".join(ln + chr(10) for ln in body_lines)}"""
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / f"{skill_id}.md"
+    dest_file.write_text(content)
+    return dest_file
+
+
+def _convert_agent_to_role(source: Path, roles_dir: Path) -> Path | None:
+    """Convert a plugin agent .md file to a dotai role.
+
+    Agent files have frontmatter with name, description, tools, model, color.
+    The body becomes the role's persona.
+    """
+    content = source.read_text()
+    frontmatter = _extract_frontmatter(content)
+    body = _extract_body(content)
+
+    name = frontmatter.get("name", source.stem)
+    description = frontmatter.get("description", "")
+    role_id = generate_id(name)
+
+    role_content = f"""---
+name: {name}
+description: {description}
+tags: imported
+---
+
+{body.strip()}
+"""
+
+    roles_dir.mkdir(parents=True, exist_ok=True)
+    dest = roles_dir / f"{role_id}.md"
+    dest.write_text(role_content)
+    return dest
+
+
+def _convert_cursor_rule(source: Path, rules_dir: Path) -> Path | None:
+    """Convert a Cursor .mdc rule file to a dotai rule.
+
+    .mdc files have frontmatter with description, globs, alwaysApply.
+    """
+    content = source.read_text()
+    frontmatter = _extract_frontmatter(content)
+    body = _extract_body(content)
+
+    name = source.stem.replace("-", " ").replace("_", " ").title()
+    description = frontmatter.get("description", "")
+    globs = frontmatter.get("globs", "")
+    rule_id = generate_id(source.stem)
+
+    fm_lines = [
+        f"name: {name}",
+        f"description: {description}",
+    ]
+    if globs:
+        fm_lines.append(f"globs: {globs}")
+    fm_lines.append("tags: imported, cursor")
+
+    rule_content = f"""---
+{chr(10).join(fm_lines)}
+---
+
+{body.strip()}
+"""
+
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    dest = rules_dir / f"{rule_id}.md"
+    dest.write_text(rule_content)
+    return dest
 
 
 # --- Internal helpers ---
