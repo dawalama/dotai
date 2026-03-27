@@ -237,7 +237,7 @@ def generate_claude_skill_md(skill: Skill, all_roles: list[Role]) -> str:
     # YAML frontmatter
     lines = ["---"]
     lines.append(f"name: {cmd_name}")
-    lines.append(f"description: {skill.description[:100]}")
+    lines.append(f"description: {skill.description}")
     lines.append('argument-hint: "[as <role>]"')
     if skill.allowed_tools:
         lines.append(f"allowed-tools: {', '.join(skill.allowed_tools)}")
