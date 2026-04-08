@@ -18,12 +18,16 @@ from .skills import load_all_skills
 
 
 def generate_primer(config: GlobalConfig, project_name: str | None = None,
-                    project_path: Path | None = None) -> str:
+                    project_path: Path | None = None,
+                    compact: bool = False) -> str:
     """Generate a universal primer that any agent can consume.
 
     This is the core knowledge block — it tells the agent what ~/.ai/ is,
     what's available, and how to use it. When project_path is given, also
     discovers local rules in <project>/.ai/rules/.
+
+    When compact=True, emits summaries with file path pointers instead of
+    full inline content. Use for agents that can read files (Claude Code).
     """
     ai_dir = config.global_ai_dir
     roles = load_all_roles(config)
@@ -71,17 +75,25 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         "",
     ]
 
-    # List active rules — include full body so agents that can't read files
-    # (like Cursor) still get the complete rule content inline.
+    # List active rules
     if project_rules:
         lines.append("## Active Rules")
         lines.append("")
-        for rule in project_rules:
-            lines.append(rule.to_prompt())
+        if compact:
+            # Summary table with file pointers — agent reads full rule on demand
+            for rule in project_rules:
+                globs = f" (applies to: `{', '.join(rule.globs)}`)" if rule.globs else ""
+                source = f" — `{rule.file_path}`" if rule.file_path else ""
+                lines.append(f"- **{rule.name}**: {rule.description}{globs}{source}")
             lines.append("")
+        else:
+            # Full inline content for agents that can't read files
+            for rule in project_rules:
+                lines.append(rule.to_prompt())
+                lines.append("")
         lines.append("")
 
-    # List available roles with full persona content
+    # List available roles
     if project_roles:
         lines.append("## Available Roles")
         lines.append("")
@@ -89,13 +101,20 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
             scope_tag = f" [{role.scope}]" if role.scope != "global" else ""
             lines.append(f"- **{role.name}**{scope_tag}: {role.description}")
         lines.append("")
-        lines.append("To adopt a role, follow its persona below.")
-        lines.append("")
-        for role in project_roles:
-            lines.append(f"### Role: {role.name}")
+
+        if compact:
+            # Pointer to role files — agent reads on demand when composing
+            lines.append("To adopt a role, read its file from `~/.ai/roles/` and follow its persona.")
             lines.append("")
-            lines.append(role.to_prompt())
+        else:
+            # Full inline content for agents that can't read files
+            lines.append("To adopt a role, follow its persona below.")
             lines.append("")
+            for role in project_roles:
+                lines.append(f"### Role: {role.name}")
+                lines.append("")
+                lines.append(role.to_prompt())
+                lines.append("")
 
     # List available skills, grouped by category
     if project_skills:
@@ -130,18 +149,24 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 lines.append(f"- **{skill.name}**{trigger}{role_ref}: {skill.description[:80]}")
             lines.append("")
 
-        lines.append("To run a skill, follow its steps below.")
-        lines.append("Folder-based skills may include helper scripts in `scripts/` — prefer these over writing from scratch.")
-        lines.append("")
+        if compact:
+            # Claude Code has native slash commands — no need for full inline definitions
+            lines.append("Skills are available as slash commands (e.g. `/run_review`).")
+            lines.append("Folder-based skills may include helper scripts in `scripts/` — prefer these over writing from scratch.")
+            lines.append("")
+        else:
+            lines.append("To run a skill, follow its steps below.")
+            lines.append("Folder-based skills may include helper scripts in `scripts/` — prefer these over writing from scratch.")
+            lines.append("")
 
-        # Include full skill definitions so file-based agents (Cursor, etc.) have everything inline
-        lines.append("## Skill Definitions")
-        lines.append("")
-        for skill in project_skills:
-            lines.append(skill.to_prompt())
+            # Include full skill definitions so file-based agents (Cursor, etc.) have everything inline
+            lines.append("## Skill Definitions")
             lines.append("")
-            lines.append("---")
-            lines.append("")
+            for skill in project_skills:
+                lines.append(skill.to_prompt())
+                lines.append("")
+                lines.append("---")
+                lines.append("")
 
     # How to use
     lines.extend([
@@ -174,8 +199,12 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
 
 def generate_claude_md_section(config: GlobalConfig, project_name: str | None = None,
                                project_path: Path | None = None) -> str:
-    """Generate a section to append to CLAUDE.md."""
-    primer = generate_primer(config, project_name, project_path)
+    """Generate a section to append to CLAUDE.md.
+
+    Uses compact mode since Claude Code can read files and has native
+    slash commands — no need for full inline content.
+    """
+    primer = generate_primer(config, project_name, project_path, compact=True)
     return f"""
 # AI Context
 
