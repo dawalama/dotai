@@ -26,6 +26,7 @@ dependencies = [
     "typer>=0.9",
     "rich>=13.0",
     "watchdog>=4.0",
+    "ai-skill-audit>=0.4.0",
 ]
 
 [project.urls]

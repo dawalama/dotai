@@ -133,6 +133,7 @@ def install(
     source: str = typer.Argument(..., help="Git repo URL or local path to install skill(s) from"),
     skill_name: Optional[str] = typer.Option(None, "--skill", "-s", help="Specific skill name within the repo"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Install to a project instead of global"),
+    skip_vet: bool = typer.Option(False, "--skip-vet", help="Skip security vetting of imported skills"),
 ):
     """Install skills from a git repo or local directory.
 
@@ -165,6 +166,23 @@ def install(
         dest_name = skill_name or source_path.name
         dest = dest_dir / dest_name
 
+        # Vet before installing
+        from ..vet import vet_skill, format_report
+        report = vet_skill(source_path)
+        if not report.is_clean:
+            console.print(f"\n[yellow]Security scan results for[/yellow] {source_path.name}:")
+            console.print(format_report(report))
+            if report.has_critical:
+                console.print("[red bold]CRITICAL issues found. This skill may be malicious.[/red bold]")
+                console.print("[red]Installation blocked. Use --skip-vet to override.[/red]")
+                if not skip_vet:
+                    raise typer.Exit(1)
+            elif report.has_high:
+                console.print("[yellow bold]High-severity issues found. Review before using.[/yellow bold]")
+                if not skip_vet:
+                    if not typer.confirm("Install anyway?"):
+                        raise typer.Exit(1)
+
         if source_path.is_file():
             shutil.copy2(source_path, dest_dir / source_path.name)
             console.print(f"[green]Installed skill:[/green] {source_path.name}")
@@ -188,6 +206,25 @@ def install(
         except Exception as e:
             console.print(f"[red]Failed to install: {e}[/red]")
             raise typer.Exit(1)
+
+        # Vet after clone (source wasn't local)
+        from ..vet import vet_skill, format_report
+        report = vet_skill(dest)
+        if not report.is_clean:
+            console.print(f"\n[yellow]Security scan results:[/yellow]")
+            console.print(format_report(report))
+            if report.has_critical:
+                console.print("[red bold]CRITICAL issues found. This skill may be malicious.[/red bold]")
+                if not skip_vet:
+                    console.print("[red]Removing installed skill.[/red]")
+                    shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+                    raise typer.Exit(1)
+            elif report.has_high:
+                console.print("[yellow bold]High-severity issues found. Review before using.[/yellow bold]")
+                if not skip_vet:
+                    if not typer.confirm("Keep installed skill?"):
+                        shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+                        raise typer.Exit(1)
 
     # Auto-detect and convert skills from various formats
     from ..converter import detect_skill_format, convert_claude_to_dotai, convert_plugin_to_dotai
@@ -568,3 +605,38 @@ def import_plugin(
     scope_label = f"project '{project}'" if project else "global"
     installed = load_skills_from_dir(dest_dir)
     console.print(f"\n  Total skills in {scope_label}: {len(installed)}")
+
+
+@app.command()
+def vet(
+    path: str = typer.Argument(..., help="Path to a skill file or directory to scan"),
+):
+    """Scan a skill for security risks before installing.
+
+    Checks for RCE patterns, credential theft, data exfiltration,
+    hardcoded secrets, defense evasion, and other malicious indicators.
+
+    Examples:
+      dotai vet ~/my-skills/deploy
+      dotai vet ./SKILL.md
+      dotai vet ~/.ai/skills/
+    """
+    from ..vet import vet_skill, format_report
+
+    target = Path(path).expanduser().resolve()
+    if not target.exists():
+        console.print(f"[red]Path not found: {target}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"Scanning [bold]{target}[/bold] for security issues...\n")
+    report = vet_skill(target)
+
+    if report.is_clean:
+        console.print("[green]No security issues found.[/green]")
+    else:
+        console.print(format_report(report))
+        if report.has_critical:
+            console.print("[red bold]CRITICAL issues detected — do not use this skill without review.[/red bold]")
+            raise typer.Exit(1)
+        elif report.has_high:
+            console.print("[yellow bold]High-severity issues detected — review before using.[/yellow bold]")
