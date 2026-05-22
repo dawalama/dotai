@@ -28,6 +28,8 @@ class Finding:
     file: str
     line: int | None = None
     match: str = ""
+    confidence: str = ""
+    disposition: str = ""
 
 
 @dataclass
@@ -35,6 +37,8 @@ class VetReport:
     findings: list[Finding] = field(default_factory=list)
     grade: str = ""
     trust_score: float = 1.0
+    recommendation: str = ""
+    verdict_summary: str = ""
 
     @property
     def has_critical(self) -> bool:
@@ -43,6 +47,18 @@ class VetReport:
     @property
     def has_high(self) -> bool:
         return any(f.severity in (Severity.CRITICAL, Severity.HIGH) for f in self.findings)
+
+    @property
+    def should_block(self) -> bool:
+        if self.recommendation:
+            return self.recommendation == "block"
+        return self.has_critical
+
+    @property
+    def should_warn(self) -> bool:
+        if self.recommendation:
+            return self.recommendation in {"human_review", "warn"} or self.should_block
+        return self.has_high
 
     @property
     def is_clean(self) -> bool:
@@ -78,6 +94,14 @@ def _classify_finding(category: str) -> Severity:
     return Severity.MEDIUM
 
 
+def _severity_from_audit(severity: str, category: str) -> Severity:
+    """Prefer ai-skill-audit severity when present, otherwise map category."""
+    value = severity.lower()
+    if value in Severity._value2member_map_:
+        return Severity(value)
+    return _classify_finding(category)
+
+
 def _vet_with_skill_audit(path: Path) -> VetReport:
     """Vet using ai-skill-audit's analyze_file API."""
     from skill_audit.analyzer import analyze_file
@@ -101,6 +125,9 @@ def _vet_with_skill_audit(path: Path) -> VetReport:
             continue
 
         report.grade = card.grade
+        if getattr(card, "verdict", None) is not None:
+            report.recommendation = card.verdict.recommendation
+            report.verdict_summary = card.verdict.summary
         label = str(file.relative_to(path)) if path.is_dir() else file.name
 
         # Extract trust dimension findings
@@ -109,6 +136,23 @@ def _vet_with_skill_audit(path: Path) -> VetReport:
                 continue
 
             report.trust_score = dim.score
+
+            audit_findings = getattr(dim, "findings", [])
+            for audit_finding in audit_findings:
+                category = audit_finding.category
+                severity = _severity_from_audit(audit_finding.severity, category)
+                report.findings.append(Finding(
+                    severity=severity,
+                    category=category,
+                    description=audit_finding.message,
+                    file=label,
+                    match=audit_finding.evidence,
+                    confidence=audit_finding.confidence,
+                    disposition=audit_finding.disposition,
+                ))
+
+            if audit_findings:
+                continue
 
             for suggestion in dim.suggestions:
                 # Suggestions are formatted as "[CATEGORY] description"
@@ -168,6 +212,10 @@ def format_report(report: VetReport) -> str:
         header += f" (grade: {report.grade}, trust: {report.trust_score:.0%})"
     header += ":"
     lines.append(header)
+    if report.recommendation:
+        lines.append(f"Recommendation: {report.recommendation}")
+    if report.verdict_summary:
+        lines.append(report.verdict_summary)
 
     for sev in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW):
         count = summary.get(sev, 0)

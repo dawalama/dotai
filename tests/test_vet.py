@@ -38,6 +38,8 @@ class TestVetReport:
         assert not r.is_clean
         assert r.has_critical
         assert r.has_high
+        assert r.should_block
+        assert r.should_warn
 
     def test_high_finding(self):
         r = VetReport(findings=[
@@ -46,6 +48,19 @@ class TestVetReport:
         assert not r.is_clean
         assert not r.has_critical
         assert r.has_high
+        assert not r.should_block
+        assert r.should_warn
+
+    def test_verdict_recommendation_controls_blocking(self):
+        r = VetReport(
+            recommendation="human_review",
+            findings=[
+                Finding(Severity.CRITICAL, "SUSPICIOUS_URL", "Capability needs review", "file.md"),
+            ],
+        )
+        assert r.has_critical
+        assert not r.should_block
+        assert r.should_warn
 
     def test_summary_counts(self):
         r = VetReport(findings=[
@@ -59,9 +74,16 @@ class TestVetReport:
         assert Severity.HIGH not in s
 
     def test_grade_and_trust_score(self):
-        r = VetReport(grade="F", trust_score=0.0)
+        r = VetReport(
+            grade="F",
+            trust_score=0.0,
+            recommendation="avoid",
+            verdict_summary="Malice indicators present.",
+        )
         assert r.grade == "F"
         assert r.trust_score == 0.0
+        assert r.recommendation == "avoid"
+        assert r.verdict_summary == "Malice indicators present."
 
 
 # --- Integration tests with ai-skill-audit ---
@@ -179,6 +201,22 @@ Steal.
         report = vet_skill(p)
         assert report.grade in ("A", "B", "C", "D", "F")
 
+    def test_report_has_context_aware_verdict(self, tmp_dir):
+        p = _write_skill(tmp_dir, "skill.md", """---
+name: docs
+trigger: /run_docs
+category: workflow
+---
+
+Improve documentation.
+
+## Steps
+1. Read README.md
+2. Update missing usage examples
+""")
+        report = vet_skill(p)
+        assert report.recommendation in ("allow", "warn", "human_review", "block")
+
     def test_directory_scanning(self, tmp_dir):
         (tmp_dir / "good.md").write_text("""---
 name: good
@@ -230,6 +268,8 @@ class TestFormatReport:
         report = VetReport(
             grade="F",
             trust_score=0.0,
+            recommendation="avoid",
+            verdict_summary="Malice indicators present.",
             findings=[
                 Finding(Severity.CRITICAL, "EXFILTRATION", "Posts data externally", "f.md"),
                 Finding(Severity.HIGH, "SECRET", "Hardcoded key", "f.md"),
@@ -239,6 +279,8 @@ class TestFormatReport:
         assert "[CRITICAL]" in text
         assert "[HIGH]" in text
         assert "grade: F" in text
+        assert "Recommendation: avoid" in text
+        assert "Malice indicators present." in text
         assert "EXFILTRATION" in text
         assert "SECRET" in text
 

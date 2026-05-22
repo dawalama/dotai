@@ -172,13 +172,13 @@ def install(
         if not report.is_clean:
             console.print(f"\n[yellow]Security scan results for[/yellow] {source_path.name}:")
             console.print(format_report(report))
-            if report.has_critical:
-                console.print("[red bold]CRITICAL issues found. This skill may be malicious.[/red bold]")
+            if report.should_block:
+                console.print("[red bold]Audit recommends blocking this skill.[/red bold]")
                 console.print("[red]Installation blocked. Use --skip-vet to override.[/red]")
                 if not skip_vet:
                     raise typer.Exit(1)
-            elif report.has_high:
-                console.print("[yellow bold]High-severity issues found. Review before using.[/yellow bold]")
+            elif report.should_warn:
+                console.print("[yellow bold]Audit recommends review before using.[/yellow bold]")
                 if not skip_vet:
                     if not typer.confirm("Install anyway?"):
                         raise typer.Exit(1)
@@ -213,14 +213,14 @@ def install(
         if not report.is_clean:
             console.print(f"\n[yellow]Security scan results:[/yellow]")
             console.print(format_report(report))
-            if report.has_critical:
-                console.print("[red bold]CRITICAL issues found. This skill may be malicious.[/red bold]")
+            if report.should_block:
+                console.print("[red bold]Audit recommends blocking this skill.[/red bold]")
                 if not skip_vet:
                     console.print("[red]Removing installed skill.[/red]")
                     shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
                     raise typer.Exit(1)
-            elif report.has_high:
-                console.print("[yellow bold]High-severity issues found. Review before using.[/yellow bold]")
+            elif report.should_warn:
+                console.print("[yellow bold]Audit recommends review before using.[/yellow bold]")
                 if not skip_vet:
                     if not typer.confirm("Keep installed skill?"):
                         shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
@@ -635,8 +635,8 @@ def vet(
         console.print("[green]No security issues found.[/green]")
     else:
         console.print(format_report(report))
-        if report.has_critical:
-            console.print("[red bold]CRITICAL issues detected — do not use this skill without review.[/red bold]")
+        if report.should_block:
+            console.print("[red bold]Audit recommends blocking this skill.[/red bold]")
             raise typer.Exit(1)
-        elif report.has_high:
-            console.print("[yellow bold]High-severity issues detected — review before using.[/yellow bold]")
+        elif report.should_warn:
+            console.print("[yellow bold]Audit recommends review before using.[/yellow bold]")
