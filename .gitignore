@@ -9,6 +9,7 @@ build/
 
 # dotai sync outputs (generated per-user, run `dotai sync` to regenerate)
 .claude/skills/
+CLAUDE.md
 .cursorrules
 AGENTS.md
 GEMINI.md

@@ -9,6 +9,70 @@ from rich.table import Table
 from . import app, console
 
 
+def _stage_tracked_skill(source: str, key: str, staging_dir: Path) -> Path:
+    """Copy or clone one recorded skill into an isolated staging directory."""
+    import shutil
+
+    local = Path(source).expanduser()
+    skill_id = key[:-3] if key.endswith(".md") else key
+    if local.exists():
+        candidates = (
+            [local]
+            if local.is_file()
+            else [
+                local / key,
+                local / skill_id,
+                local / "skills" / key,
+                local / "skills" / skill_id,
+                local,
+            ]
+        )
+        selected = next((candidate for candidate in candidates if candidate.exists()), None)
+        if not selected:
+            raise FileNotFoundError(f"Tracked skill '{key}' not found in {source}")
+        staged = staging_dir / selected.name
+        if selected.is_file():
+            shutil.copy2(selected, staged)
+        else:
+            shutil.copytree(selected, staged)
+        return staged
+
+    from ..skills import install_skill_from_repo
+
+    return install_skill_from_repo(source, staging_dir, skill_id)
+
+
+def _install_staged_skill(staged: Path, dest_dir: Path, key: str) -> Path:
+    """Install a vetted staged skill while preserving its recorded identity."""
+    import shutil
+
+    from ..converter import (
+        convert_claude_to_dotai,
+        convert_plugin_to_dotai,
+        detect_skill_format,
+    )
+
+    fmt = detect_skill_format(staged)
+    if fmt == "claude-native":
+        return convert_claude_to_dotai(staged, dest_dir)
+    if fmt in ("claude-plugin", "cursor-plugin", "gemini-extension"):
+        converted = convert_plugin_to_dotai(staged, dest_dir)
+        if not converted:
+            raise FileNotFoundError(f"No skills found while refreshing '{key}'")
+        matching = next((path for path in converted if path.name == key), None)
+        return matching or converted[0]
+
+    dest = dest_dir / key
+    if staged.is_file():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(staged, dest)
+    else:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(staged, dest)
+    return dest
+
+
 @app.command()
 def prompt(
     skill_name: str = typer.Argument(..., help="Skill ID or trigger (e.g. review, /commit)"),
@@ -130,10 +194,16 @@ def skills(
 
 @app.command()
 def install(
-    source: str = typer.Argument(..., help="Git repo URL or local path to install skill(s) from"),
+    source: Optional[str] = typer.Argument(None, help="Git repo URL or local path to install skill(s) from"),
     skill_name: Optional[str] = typer.Option(None, "--skill", "-s", help="Specific skill name within the repo"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Install to a project instead of global"),
     skip_vet: bool = typer.Option(False, "--skip-vet", help="Skip security vetting of imported skills"),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        "-u",
+        help="Re-install skill(s) from recorded sources (.dotai-sources.json). Use with -s or alone for all.",
+    ),
 ):
     """Install skills from a git repo or local directory.
 
@@ -143,6 +213,10 @@ def install(
 
     From a local directory:
       dotai install ~/my-skills/review
+
+    Re-install from tracked sources (team conventions repo):
+      dotai install --update
+      dotai install --update -s mvp
     """
     import shutil
     from ..store import load_config
@@ -159,6 +233,68 @@ def install(
         dest_dir = config.global_skills_path
 
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Update from recorded sources ---
+    if update:
+        import tempfile
+
+        from ..skills import load_sources, record_source
+        from ..vet import format_report, vet_skill
+
+        sources = load_sources(dest_dir)
+        if not sources:
+            console.print("[dim]No recorded skill sources to update. Install with a URL first.[/dim]")
+            raise typer.Exit(1)
+
+        keys = [skill_name] if skill_name else list(sources.keys())
+        updated = 0
+        for key in keys:
+            meta = sources.get(key)
+            if not meta:
+                console.print(f"[yellow]No source recorded for '{key}'[/yellow]")
+                continue
+            url = meta.get("url", "")
+            if not url:
+                continue
+            console.print(f"[dim]Updating from {url}...[/dim]")
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    staged = _stage_tracked_skill(url, key, Path(tmp))
+                    report = vet_skill(staged)
+                    if not report.is_clean:
+                        console.print(
+                            f"\n[yellow]Security scan results for update[/yellow] {key}:"
+                        )
+                        console.print(format_report(report))
+                        if report.should_block and not skip_vet:
+                            console.print(
+                                "[red]Update blocked; existing skill was preserved. "
+                                "Use --skip-vet to override.[/red]"
+                            )
+                            continue
+                        if report.should_warn and not skip_vet:
+                            if not typer.confirm("Apply this update?"):
+                                console.print("[dim]Existing skill preserved.[/dim]")
+                                continue
+
+                    installed = _install_staged_skill(staged, dest_dir, key)
+                    record_source(
+                        dest_dir,
+                        installed.name,
+                        url,
+                        "local" if Path(url).expanduser().exists() else "git",
+                    )
+                    console.print(f"[green]Updated skill:[/green] {installed.name}")
+                updated += 1
+            except Exception as e:
+                console.print(f"[red]Failed to update {key}: {e}[/red]")
+        console.print(f"[green]Refreshed {updated} source(s)[/green]")
+        console.print("[dim]Run `dotai sync` so agents pick up changes.[/dim]")
+        return
+
+    if not source:
+        console.print("[red]Provide a source URL/path, or use --update[/red]")
+        raise typer.Exit(1)
 
     source_path = Path(source).expanduser()
     if source_path.exists():

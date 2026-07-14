@@ -1,0 +1,8 @@
+name: dotai
+description: Universal AI context for any coding agent. Defines a universal `~/.ai/`
+  directory convention that any tool can consume for roles, skills, and rules.
+type: backend
+stack:
+  backend: none
+  frontend: none
+features: []

@@ -19,7 +19,8 @@ Your knowledge about how to write code, review it, ship it, and debug it gets sc
 
 - **Roles** — Cognitive modes that shift how the AI thinks (reviewer, architect, founder, QA, etc.)
 - **Skills** — Reusable workflows with steps, inputs, gotchas, and role references
-- **Rules** — Structured coding standards with per-project toggles and file-pattern scoping
+- **Rules** — Structured coding standards with per-project toggles and file-pattern scoping (hard constraints)
+- **Preference packs** — Soft, borrowable taste (CLI stack, design micro-style); never override hard rules
 - **Agent sync** — Generate `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, or `AGENTS.md` from your `~/.ai/`
 - **Native slash commands** — For Claude Code, skills become real `/run_*` commands automatically
 
@@ -62,7 +63,7 @@ cd ~/my-project
 dotai sync
 ```
 
-This generates agent config files in your project root — `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, and `AGENTS.md` — each with your complete knowledge context inline. For Claude Code, it also generates `.claude/skills/` entries so your skills appear as native slash commands.
+This generates agent config files in your project root — `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, and `AGENTS.md`. Structured rules and freeform conventions are included in full; roles and skills are included as a compact catalog by default. For Claude Code, sync also generates `.claude/skills/` entries so skills appear as native slash commands. Use `dotai sync --full` when an agent needs every role and skill definition inline.
 
 ## Usage
 
@@ -114,23 +115,122 @@ dotai skills --category deployment
 
 ### Recording what you learn
 
+`dotai learn` creates a **structured rule file** in `~/.ai/rules/` by default (not a freeform journal scrap).
+
 ```bash
-# Something went wrong — record it so the AI never repeats it
+# Preview the rule without writing
 dotai learn "auth-header" \
   --issue "Forgot Bearer prefix on API token" \
-  --correction "Always prepend 'Bearer ' to auth tokens"
+  --correction "Always prepend 'Bearer ' to auth tokens" \
+  --dry-run
 
-# Or let the agent do it — /run_learn reviews the session and proposes a rule
-> /run_learn
+# Save structured rule + resync agent configs
+dotai learn "auth-header" \
+  -i "Forgot Bearer prefix on API token" \
+  -c "Always prepend 'Bearer ' to auth tokens" \
+  --sync
 
 # Import a detailed rule from a file
 dotai learn "no-useEffect" --from-file react-rules.md --globs "*.tsx,*.ts"
 
+# Freeform journal entry in rules.md (opt-in)
+dotai learn "note" -i "..." -c "..." --append-md
+
+# Or let the agent do it — /run_learn reviews the session and proposes a rule
+> /run_learn
+
 # Disable a rule for one legacy project
 dotai toggle no-useeffect --off --project legacy-app
+
+# Audit rule quality (duplicates, empty bodies)
+dotai rules --check
 ```
 
-The feedback loop: **vibe-code → agent makes mistake → `/run_learn` → rule created → next sync → agent never repeats it.** Your agent gets smarter every session.
+The feedback loop: **vibe-code → agent makes mistake → `/run_learn` → structured rule → `dotai sync` → agent never repeats it.**
+
+### Migrating existing agent files
+
+Already have a `CLAUDE.md`, `.cursorrules`, or `AGENTS.md`? Import user-authored content into `~/.ai/`:
+
+```bash
+# Preview
+dotai import-agent CLAUDE.md --dry-run
+
+# Append into project .ai/rules.md (default)
+dotai import-agent CLAUDE.md
+
+# One structured rule
+dotai import-agent .cursorrules --mode rule --name project-conventions
+
+# One rule per ## section
+dotai import-agent AGENTS.md --mode sections --dry-run
+
+# Scan a project directory for known agent files
+dotai import-agent . --mode rules_md
+```
+
+dotai strips its own managed marker sections so you don't re-import generated primers. Directory imports combine all discovered agent files into one update, and structured-rule imports choose a new suffixed filename rather than overwrite an existing rule. Preview unfamiliar files with `--dry-run` before importing.
+
+### Preference packs (taste) — borrowable soft style
+
+Hard rules are law. **Preference packs** are soft taste: CLI stack, design micro-details, export style — things that are too granular or fluid for hard rules. You can author them, pull someone else's, and activate them per project.
+
+**Precedence:** hard rules → freeform `rules.md` → active preference packs → model default.
+
+```bash
+# Create a pack
+dotai prefs new "CLI Conventions" --domain cli
+# Edit ~/.ai/preferences/cli-conventions.md, then activate:
+dotai prefs use cli-conventions
+dotai sync
+
+# Borrow / pull someone else's taste (local file or git repo)
+dotai prefs pull ./design-eng-taste.md --name design-eng --domain design
+dotai prefs pull https://github.com/org/taste-packs -n cli
+dotai prefs use design-eng
+
+# Session overlay without changing active list
+dotai sync --with-prefs design-eng,cli
+dotai primer --with-prefs design-eng
+
+# List / show / deactivate
+dotai prefs
+dotai prefs show cli-conventions
+dotai prefs unuse design-eng
+
+# Project operations stay inside that project; global removal is explicit
+dotai prefs use cli-conventions --project my-app
+dotai prefs remove cli-conventions --global
+```
+
+Preference lookup and removal are scope-safe: a project command cannot mutate a pack owned by another registered project. Removing a pack also removes it from the activation list for the pack's owning scope.
+
+Example pack (`~/.ai/preferences/cli.md`):
+
+```markdown
+---
+name: CLI Conventions
+id: cli
+description: How I build CLIs
+domain: cli
+tags: typescript, commander
+---
+
+## Soft preferences
+
+Hard rules always take precedence if they conflict.
+
+### Stack
+- TypeScript + tsup
+- Commander.js
+- Vitest
+- pnpm (npm link for local bins)
+
+### Style
+- Lowercase `-v` for version
+- Start version at `0.0.1`
+- Commands live under `commands/`
+```
 
 ### Searching your knowledge
 
@@ -164,8 +264,11 @@ dotai init ~/other-project
 ```
 ~/.ai/                          # Global (cross-project)
 ├── rules.md                    # Inline rules, conventions, and lessons learned
-├── rules/                      # Structured rules (individual files)
+├── rules/                      # Structured rules (hard constraints)
 │   └── no-useeffect.md         # Example: ban useEffect in React
+├── preferences/                # Soft taste packs (borrowable style priors)
+│   └── cli.md                  # Example: CLI stack / micro-style
+├── preferences-active.json     # Which preference packs are active
 ├── roles/                      # Cognitive modes
 │   ├── reviewer.md             # Paranoid staff engineer
 │   ├── architect.md            # Systems thinker
@@ -375,11 +478,17 @@ All useEffect usage must be replaced with declarative patterns...
 # List active rules
 dotai rules
 
+# Audit duplicates / empty bodies
+dotai rules --check
+
 # Import a rule from an external file
 dotai learn "no-useEffect" --from-file react-rule.md --globs "*.tsx,*.ts"
 
-# Record an inline learning
+# Record a learning as a structured rule (default)
 dotai learn "auth-header" --issue "Forgot Bearer prefix" --correction "Always prepend Bearer to tokens"
+
+# Preview first
+dotai learn "auth-header" -i "..." -c "..." --dry-run
 
 # Disable a rule globally
 dotai toggle no-useeffect --off
@@ -391,11 +500,20 @@ dotai toggle no-useeffect --off --project my-legacy-app
 dotai toggle no-useeffect --on
 ```
 
-Rules are included inline in every synced agent file, so agents that can't read external files still get the full rule content.
+Structured rules are included **inline** in every synced agent file. Freeform `rules.md` is included too. Skills/roles stay as catalogs unless you pass `dotai sync --full`.
 
 ## Agent Sync
 
-`dotai sync` generates tool-specific bootstrap files with **full inline content** — every rule body, role persona, skill definition, and gotcha is embedded so agents that can't read external files still get everything.
+`dotai sync` generates tool-specific bootstrap files with:
+
+- **Full structured rule bodies** (high-value constraints)
+- **Freeform `rules.md` conventions** (previously referenced but not inlined)
+- **Role and skill catalogs** (names, triggers, descriptions — not every skill novel)
+- **Claude Code**: compact pointers + native `.claude/skills/` slash commands
+
+Use `--full` only when you need every role persona and skill definition dumped inline (larger context).
+
+These files contain machine-specific context and may include absolute paths. Treat them as generated per-user artifacts unless your team intentionally commits shared agent instructions. dotai-managed sections are marker-delimited, so syncing preserves user-authored content outside those markers.
 
 ```bash
 # Generate all (CLAUDE.md + .cursorrules + GEMINI.md + AGENTS.md)
@@ -405,8 +523,13 @@ dotai sync
 dotai sync --agents claude,cursor
 dotai sync --agents gemini
 
+# Legacy-style full dump (roles + skill definitions inline)
+dotai sync --full
+
 # Print primer to stdout (for piping)
 dotai primer
+dotai primer --compact
+dotai primer --full
 ```
 
 ### Supported Agents
@@ -414,17 +537,17 @@ dotai primer
 | Agent | Output File | Sync Command | Notes |
 |-------|-------------|--------------|-------|
 | Claude Code | `CLAUDE.md` + `.claude/skills/` | `dotai sync --agents claude` | Marker-based merging + native slash commands |
-| Cursor | `.cursorrules` | `dotai sync --agents cursor` | Full context inline |
+| Cursor | `.cursorrules` | `dotai sync --agents cursor` | Full rules and preferences; role/skill catalog by default |
 | Gemini CLI | `GEMINI.md` | `dotai sync --agents gemini` | Auto-discovered in project root and `~/.gemini/GEMINI.md` |
 | Generic | `AGENTS.md` | `dotai sync --agents generic` | Works with Codex, Copilot, and any agent that reads it |
 
 For Claude Code, `dotai sync` also generates `.claude/skills/<trigger>/SKILL.md` files. These register as native slash commands — they appear in autocomplete and work as real `/run_*` commands with role composition support built in.
 
-> **Tip:** Run `dotai primer | pbcopy` to copy the full context to your clipboard for pasting into any agent's system prompt.
+> **Tip:** Run `dotai primer --full | pbcopy` to copy the complete context to your clipboard for pasting into an agent's system prompt.
 
 ## Installing Skills
 
-Install skills from git repos or local directories. Claude-native `SKILL.md` files are auto-detected and converted to dotai format with triggers and categories inferred from the content.
+Install skills from git repos or local directories. Claude-native `SKILL.md` files are auto-detected and converted to dotai format with triggers and categories inferred from the content. New installs are security-vetted before use.
 
 ```bash
 # Install from a GitHub repo — auto-detects and converts Claude-native skills
@@ -441,6 +564,15 @@ dotai install https://github.com/team/skills -p my-project
 ```
 
 After install, run `dotai sync` to make them available as slash commands in Claude Code, Gemini, etc.
+
+Refresh skills that were installed from a tracked source (team conventions repo):
+
+```bash
+dotai install --update
+dotai install --update -s mvp
+```
+
+Updates are staged and security-vetted before installation. A blocked or declined update leaves the existing skill unchanged. Multi-skill repositories refresh each recorded skill independently. `--skip-vet` is an explicit trust override and should only be used for a source you have reviewed.
 
 ### Converting Claude-native skills
 
@@ -535,13 +667,21 @@ dotai roles                            # List available roles
 dotai role <name>                      # Output a role's full prompt to stdout
 dotai skills [-c category]             # List skills (optionally filter by category)
 dotai prompt <skill> [--role <role>]   # Assemble skill + role prompt for any agent
-dotai sync [path] [--agents ...]       # Sync ~/.ai/ into agent config files
-dotai primer [--project <name>]        # Print full agent context to stdout
-dotai rules [-p project] [-a]          # List rules (resolved or all)
+dotai sync [path] [--agents ...] [--full]  # Sync ~/.ai/ into agent config files
+dotai primer [--project <name>] [--full|--compact]  # Print agent context to stdout
+dotai rules [-p project] [-a] [--check]    # List rules (or audit quality)
 dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-project
+dotai learn "title" -i "..." -c "..."  # Create structured rule (default)
+dotai learn "title" -i "..." -c "..." --dry-run|--sync|--force|--append-md
 dotai learn "title" --from-file <f>    # Import structured rule from a file
-dotai learn "title" -i "..." -c "..."  # Record an inline learning
+dotai import-agent <path> [-m mode] [--dry-run]  # Non-destructive agent-file migration
+dotai prefs [list|show|new|pull|use|unuse|remove]  # Preference / taste packs
+dotai prefs new "CLI" --domain cli     # Create a soft style pack
+dotai prefs pull <path|url> [-n id]    # Borrow / install a pack
+dotai prefs use <id> [-p project|--global]  # Activate pack in an explicit scope
+dotai sync --with-prefs a,b            # Session overlay of preference packs
 dotai install <source> [-s skill]      # Install skills from git repo or local path
+dotai install --update [-s skill] [--skip-vet]  # Vetted refresh from recorded sources
 dotai import-plugin <source>          # Import from Claude/Cursor/Gemini plugin
 dotai remove <skill> [-p project]     # Remove an installed skill
 dotai convert <path> [--dry-run]      # Convert Claude-native SKILL.md to dotai format

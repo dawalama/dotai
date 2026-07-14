@@ -213,6 +213,238 @@ def build_rules_node(rules: list[Rule], category_name: str, category_id: str) ->
     )
 
 
+def format_rule_markdown(
+    name: str,
+    description: str,
+    body: str,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+    enabled: bool = True,
+) -> str:
+    """Build a structured rule file as markdown (frontmatter + body)."""
+    fm_lines = [
+        "---",
+        f"name: {name}",
+        f"description: {description}",
+    ]
+    if globs:
+        fm_lines.append(f"globs: {', '.join(globs)}")
+    if tags:
+        fm_lines.append(f"tags: {', '.join(tags)}")
+    if not enabled:
+        fm_lines.append("enabled: false")
+    fm_lines.append("---")
+    return "\n".join(fm_lines) + "\n\n" + body.strip() + "\n"
+
+
+def build_rule_from_learning(
+    name: str,
+    dest_dir: Path,
+    issue: str,
+    correction: str,
+    description: str | None = None,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> tuple[Path, str]:
+    """Build path + markdown for a structured rule from issue/correction.
+
+    Does not write to disk.
+    """
+    rule_id = generate_rule_id(name)
+    dest_path = dest_dir / f"{rule_id}.md"
+
+    desc = (description or correction).strip()
+    if len(desc) > 120:
+        desc = desc[:117] + "..."
+
+    body = (
+        f"### Rule: `{name}`\n\n"
+        f"_{desc}_\n\n"
+        f"**Issue:** {issue.strip()}\n\n"
+        f"**Correction:** {correction.strip()}\n\n"
+        "Always follow the correction. Do not repeat the issue.\n"
+    )
+
+    auto_tags = tags if tags is not None else _detect_tags(f"{issue}\n{correction}")
+    content = format_rule_markdown(
+        name=name,
+        description=desc,
+        body=body,
+        globs=globs,
+        tags=auto_tags or None,
+    )
+    return dest_path, content
+
+
+def create_rule_from_learning(
+    name: str,
+    dest_dir: Path,
+    issue: str,
+    correction: str,
+    description: str | None = None,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> Path:
+    """Create a structured rule from an issue/correction pair.
+
+    This is the primary capture path for `dotai learn`. Writes to
+    ``dest_dir/<rule-id>.md``.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path, content = build_rule_from_learning(
+        name=name,
+        dest_dir=dest_dir,
+        issue=issue,
+        correction=correction,
+        description=description,
+        globs=globs,
+        tags=tags,
+    )
+    dest_path.write_text(content)
+    return dest_path
+
+
+def find_duplicate_rules(
+    config: GlobalConfig,
+    name: str,
+    description: str = "",
+    project_name: str | None = None,
+) -> list[Rule]:
+    """Find existing rules that likely duplicate a new learning.
+
+    Matches by rule id, exact name (case-insensitive), or substantial
+    description overlap. Used as a quality gate before write.
+    """
+    rule_id = generate_rule_id(name)
+    name_lower = name.strip().lower()
+    desc_lower = description.strip().lower()
+
+    if project_name:
+        existing = resolve_rules_for_project(config, project_name)
+        # Also include disabled global rules for the project so we catch id clashes
+        all_rules = load_all_rules(config)
+        seen = {r.id for r in existing}
+        for r in all_rules:
+            if r.id not in seen and (r.scope == "global" or r.scope == project_name):
+                existing.append(r)
+                seen.add(r.id)
+    else:
+        existing = load_all_rules(config)
+
+    matches: list[Rule] = []
+    for rule in existing:
+        if rule.id == rule_id:
+            matches.append(rule)
+            continue
+        if rule.name.strip().lower() == name_lower:
+            matches.append(rule)
+            continue
+        if desc_lower and rule.description:
+            rd = rule.description.strip().lower()
+            if desc_lower == rd:
+                matches.append(rule)
+            elif len(desc_lower) >= 20 and (desc_lower in rd or rd in desc_lower):
+                matches.append(rule)
+    return matches
+
+
+def check_rule_quality(config: GlobalConfig) -> list[dict]:
+    """Scan for empty bodies, missing descriptions, and duplicate ids/names.
+
+    Returns a list of finding dicts: {severity, rule_id, message}.
+    """
+    rules = load_all_rules(config)
+    findings: list[dict] = []
+    by_id: dict[str, list[Rule]] = {}
+    by_name: dict[str, list[Rule]] = {}
+
+    for rule in rules:
+        by_id.setdefault(rule.id, []).append(rule)
+        by_name.setdefault(rule.name.strip().lower(), []).append(rule)
+
+        if not rule.description or rule.description.strip() == rule.name:
+            findings.append({
+                "severity": "warn",
+                "rule_id": rule.id,
+                "message": "Missing or weak description",
+            })
+        if not rule.body or len(rule.body.strip()) < 20:
+            findings.append({
+                "severity": "warn",
+                "rule_id": rule.id,
+                "message": "Empty or very short rule body",
+            })
+
+    for rid, group in by_id.items():
+        if len(group) > 1:
+            scopes = ", ".join(f"{r.scope}" for r in group)
+            findings.append({
+                "severity": "error",
+                "rule_id": rid,
+                "message": f"Duplicate rule id across scopes: {scopes}",
+            })
+
+    for name, group in by_name.items():
+        if len(group) > 1:
+            ids = ", ".join(r.id for r in group)
+            findings.append({
+                "severity": "warn",
+                "rule_id": group[0].id,
+                "message": f"Same name '{name}' on multiple rules: {ids}",
+            })
+
+    return findings
+
+
+def load_rules_md(ai_dir: Path) -> str:
+    """Load freeform rules.md content if present (empty string if missing)."""
+    path = ai_dir / "rules.md"
+    if path.exists():
+        return path.read_text().strip()
+    return ""
+
+
+def build_rule_from_file(
+    source_path: Path,
+    name: str,
+    dest_dir: Path,
+    description: str | None = None,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> tuple[Path, str]:
+    """Build path + markdown for a rule imported from an external file.
+
+    Does not write to disk.
+    """
+    content = source_path.read_text().strip()
+    rule_id = generate_rule_id(name)
+    body = _extract_rule_body(content)
+
+    if not description:
+        for line in body.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("|") or stripped.startswith("```") or not stripped:
+                continue
+            cleaned = re.sub(r"[*`\[\]]", "", stripped).strip()
+            if cleaned and len(cleaned) > 10:
+                description = cleaned[:120]
+                break
+        if not description:
+            description = name
+
+    if not tags:
+        tags = _detect_tags(body)
+
+    rule_content = format_rule_markdown(
+        name=name,
+        description=description,
+        body=body,
+        globs=globs,
+        tags=tags or None,
+    )
+    return dest_dir / f"{rule_id}.md", rule_content
+
+
 def create_rule_from_file(source_path: Path, name: str, dest_dir: Path,
                           description: str | None = None,
                           globs: list[str] | None = None,
@@ -224,47 +456,15 @@ def create_rule_from_file(source_path: Path, name: str, dest_dir: Path,
 
     Returns the path to the created rule file.
     """
-    content = source_path.read_text().strip()
-    rule_id = generate_rule_id(name)
     dest_dir.mkdir(parents=True, exist_ok=True)
-
-    # Extract the actionable body first (strips prose)
-    body = _extract_rule_body(content)
-
-    # Auto-detect description from the rule body (not raw source prose)
-    if not description:
-        for line in body.split("\n"):
-            stripped = line.strip()
-            # Skip headings and empty lines — look for the first real sentence
-            if stripped.startswith("#") or stripped.startswith("|") or stripped.startswith("```") or not stripped:
-                continue
-            # Clean up markdown formatting
-            cleaned = re.sub(r"[*`\[\]]", "", stripped).strip()
-            if cleaned and len(cleaned) > 10:
-                description = cleaned[:120]
-                break
-        if not description:
-            description = name
-
-    # Auto-detect tags from body
-    if not tags:
-        tags = _detect_tags(body)
-
-    # Build frontmatter
-    fm_lines = [
-        "---",
-        f"name: {name}",
-        f"description: {description}",
-    ]
-    if globs:
-        fm_lines.append(f"globs: {', '.join(globs)}")
-    if tags:
-        fm_lines.append(f"tags: {', '.join(tags)}")
-    fm_lines.append("---")
-
-    rule_content = "\n".join(fm_lines) + "\n\n" + body + "\n"
-
-    dest_path = dest_dir / f"{rule_id}.md"
+    dest_path, rule_content = build_rule_from_file(
+        source_path=source_path,
+        name=name,
+        dest_dir=dest_dir,
+        description=description,
+        globs=globs,
+        tags=tags,
+    )
     dest_path.write_text(rule_content)
     return dest_path
 

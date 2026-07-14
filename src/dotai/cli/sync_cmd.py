@@ -13,11 +13,23 @@ from . import app, console
 def sync(
     path: str = typer.Argument(".", help="Project path to sync into"),
     agents: Optional[str] = typer.Option(None, help="Comma-separated: claude,cursor,gemini,generic"),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Inline full role personas and skill definitions (larger context; default is catalog + full rules)",
+    ),
+    with_prefs: Optional[str] = typer.Option(
+        None,
+        "--with-prefs",
+        help="Comma-separated preference pack ids to activate for this sync only (session overlay)",
+    ),
 ):
     """Sync ~/.ai/ knowledge into agent-specific config files.
 
     Generates CLAUDE.md, .cursorrules, GEMINI.md, and/or AGENTS.md with
-    full context about available roles, skills, rules, and gotchas.
+    structured rules (full bodies), freeform rules.md, active preference packs,
+    and catalogs of roles/skills. Use --full to dump complete skill definitions
+    and role personas into those files.
     """
     from ..store import load_config
     from ..sync import sync_project
@@ -30,7 +42,10 @@ def sync(
     project_name = project_config.name if project_config else None
 
     agent_list = agents.split(",") if agents else None
-    written = sync_project(project_path, config, project_name, agent_list)
+    extra = [p.strip() for p in with_prefs.split(",")] if with_prefs else None
+    written = sync_project(
+        project_path, config, project_name, agent_list, full=full, extra_prefs=extra
+    )
 
     for f in written:
         console.print(f"  [green]Synced[/green] {f}")
@@ -39,15 +54,21 @@ def sync(
 @app.command()
 def primer(
     project: Optional[str] = typer.Option(None, help="Scope to a specific project"),
+    full: bool = typer.Option(False, "--full", help="Include full role personas and skill definitions"),
+    compact: bool = typer.Option(False, "--compact", help="Summaries + file paths only (for agents that can read files)"),
+    with_prefs: Optional[str] = typer.Option(
+        None,
+        "--with-prefs",
+        help="Comma-separated preference pack ids to include for this primer only",
+    ),
 ):
     """Print the agent primer to stdout (for piping into other tools)."""
     from ..store import load_config
     from ..sync import generate_primer
 
     config = load_config()
-    console.print(generate_primer(config, project))
-
-
+    extra = [p.strip() for p in with_prefs.split(",")] if with_prefs else None
+    console.print(generate_primer(config, project, compact=compact, full=full, extra_prefs=extra))
 @app.command()
 def index(
     refresh: bool = typer.Option(False, "--refresh", "-r", help="Force rebuild"),

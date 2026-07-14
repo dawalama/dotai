@@ -94,6 +94,56 @@ class Rule(BaseModel):
         return "\n".join(lines)
 
 
+class PreferencePack(BaseModel):
+    """Soft style/taste pack — borrowable priors, not hard law.
+
+    Precedence when generating code:
+      hard rules (rules/) > freeform rules.md > active preference packs > model default
+
+    Preference packs capture micro-taste (CLI stack, design details, export style)
+    that is too granular or too fluid for hard rules. They can be authored, pulled
+    from others, or distilled from a repo — and activated per project or session.
+    """
+
+    id: str
+    name: str
+    description: str = ""
+    domain: str = "general"  # cli | react | api | design | general | custom
+    enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
+    body: str = ""
+    source: str = ""  # where this pack came from (local, git URL, author)
+    confidence: float | None = Field(
+        default=None,
+        description="Optional 0-1 confidence when distilled/learned",
+    )
+    file_path: Path | None = None
+    scope: str = "global"  # global | project name
+
+    def to_prompt(self) -> str:
+        """Generate preference pack text for LLM injection."""
+        lines = [f"### Preference pack: {self.name} (`{self.id}`)"]
+        if self.description:
+            lines.append(f"_{self.description}_")
+        meta: list[str] = []
+        if self.domain and self.domain != "general":
+            meta.append(f"domain: {self.domain}")
+        if self.source:
+            meta.append(f"source: {self.source}")
+        if self.confidence is not None:
+            meta.append(f"confidence: {self.confidence:.2f}")
+        if meta:
+            lines.append(f"**{' · '.join(meta)}**")
+        lines.append("")
+        lines.append(
+            "These are **soft preferences** (style/taste). "
+            "Hard rules always take precedence if they conflict."
+        )
+        lines.append("")
+        lines.append(self.body)
+        return "\n".join(lines)
+
+
 class Skill(BaseModel):
     """A reusable AI skill/workflow.
 
@@ -345,6 +395,10 @@ class ProjectConfig(BaseModel):
     def roles_path(self) -> Path:
         return self.full_ai_path / "roles"
 
+    @property
+    def preferences_path(self) -> Path:
+        return self.full_ai_path / "preferences"
+
 
 class GlobalConfig(BaseModel):
     """Global configuration for the ~/.ai/ knowledge system."""
@@ -364,6 +418,10 @@ class GlobalConfig(BaseModel):
     @property
     def global_roles_path(self) -> Path:
         return self.global_ai_dir / "roles"
+
+    @property
+    def global_preferences_path(self) -> Path:
+        return self.global_ai_dir / "preferences"
 
     def get_project(self, name: str) -> ProjectConfig | None:
         return next((p for p in self.projects if p.name == name), None)

@@ -12,27 +12,36 @@ import shutil
 from pathlib import Path
 
 from .models import GlobalConfig, Skill, Role
+from .preferences import format_preferences_section, resolve_preference_packs
 from .roles import load_all_roles
-from .rules import load_rules_from_dir, resolve_rules_for_project
+from .rules import load_rules_from_dir, load_rules_md, resolve_rules_for_project
 from .skills import load_all_skills
 
 
 def generate_primer(config: GlobalConfig, project_name: str | None = None,
                     project_path: Path | None = None,
-                    compact: bool = False) -> str:
+                    compact: bool = False,
+                    full: bool = False,
+                    extra_prefs: list[str] | None = None) -> str:
     """Generate a universal primer that any agent can consume.
 
     This is the core knowledge block — it tells the agent what ~/.ai/ is,
     what's available, and how to use it. When project_path is given, also
     discovers local rules in <project>/.ai/rules/.
 
-    When compact=True, emits summaries with file path pointers instead of
-    full inline content. Use for agents that can read files (Claude Code).
+    Modes:
+      - default: full rule bodies + freeform rules.md + active prefs; roles/skills as catalogs
+      - compact=True: summaries + file pointers (agents that can read files)
+      - full=True: inline full role personas and skill definitions (legacy dump)
+      - extra_prefs: session overlay pack ids (on top of project/global active)
     """
     ai_dir = config.global_ai_dir
     roles = load_all_roles(config)
     rules = resolve_rules_for_project(config, project_name)
     skills = load_all_skills(config)
+    pref_packs = resolve_preference_packs(
+        config, project_name, project_path, extra=extra_prefs
+    )
 
     # Discover local project rules that aren't managed by dotai
     if project_path:
@@ -54,6 +63,22 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
 
     project_rules = rules
 
+    # Freeform rules.md (global + project) — was previously only referenced, never inlined
+    freeform_sections: list[tuple[str, str]] = []
+    global_rules_md = load_rules_md(ai_dir)
+    if global_rules_md:
+        freeform_sections.append(("Global (rules.md)", global_rules_md))
+    if project_path:
+        local_md = load_rules_md(project_path / ".ai")
+        if local_md:
+            freeform_sections.append(("Project (.ai/rules.md)", local_md))
+    elif project_name:
+        proj = config.get_project(project_name)
+        if proj:
+            local_md = load_rules_md(proj.full_ai_path)
+            if local_md:
+                freeform_sections.append(("Project (.ai/rules.md)", local_md))
+
     lines = [
         "# AI Knowledge Base (~/.ai/)",
         "",
@@ -64,50 +89,73 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         "",
         "```",
         "~/.ai/",
-        "  rules.md          # Coding rules, conventions, and lessons learned",
+        "  rules.md          # Freeform conventions and notes",
+        "  rules/            # Structured rules (individual files) — HARD constraints",
+        "  preferences/      # Soft taste packs (borrowable style priors)",
         "  roles/            # Cognitive modes (personas for different tasks)",
         "  skills/           # Reusable workflows (slash commands)",
         "  tools/            # Python tool implementations",
         "```",
         "",
         "Project-specific overrides live in `<project>/.ai/` with the same structure.",
-        "Project rules take precedence over global rules.",
+        "",
+        "**Precedence:** hard rules > freeform rules.md > active preference packs > model default.",
+        "Preference packs are soft taste (stack, structure, micro-style). Never override security/architecture rules.",
         "",
     ]
 
-    # List active rules
+    # Freeform conventions (rules.md) — high value, previously missing from primer
+    if freeform_sections:
+        lines.append("## Freeform Conventions (rules.md)")
+        lines.append("")
+        lines.append("Follow these project/global notes in addition to structured rules.")
+        lines.append("")
+        for label, text in freeform_sections:
+            lines.append(f"### {label}")
+            lines.append("")
+            lines.append(text)
+            lines.append("")
+        lines.append("")
+
+    # Structured rules — always high priority
     if project_rules:
         lines.append("## Active Rules")
         lines.append("")
-        if compact:
+        if compact and not full:
             # Summary table with file pointers — agent reads full rule on demand
             for rule in project_rules:
                 globs = f" (applies to: `{', '.join(rule.globs)}`)" if rule.globs else ""
                 source = f" — `{rule.file_path}`" if rule.file_path else ""
                 lines.append(f"- **{rule.name}**: {rule.description}{globs}{source}")
             lines.append("")
+            lines.append("Read each rule file fully before acting in matching paths.")
+            lines.append("")
         else:
-            # Full inline content for agents that can't read files
+            # Full inline content (default for agents that may not read external files)
             for rule in project_rules:
                 lines.append(rule.to_prompt())
                 lines.append("")
         lines.append("")
 
-    # List available roles
+    # Active preference / taste packs (soft priors — after hard rules)
+    pref_section = format_preferences_section(
+        pref_packs, compact=compact and not full
+    )
+    if pref_section:
+        lines.append(pref_section)
+        lines.append("")
+
+    # Roles — catalog by default; full personas only with full=True
     if project_roles:
         lines.append("## Available Roles")
         lines.append("")
         for role in project_roles:
             scope_tag = f" [{role.scope}]" if role.scope != "global" else ""
-            lines.append(f"- **{role.name}**{scope_tag}: {role.description}")
+            path_hint = f" — `{role.file_path}`" if role.file_path and (compact or not full) else ""
+            lines.append(f"- **{role.name}**{scope_tag}: {role.description}{path_hint}")
         lines.append("")
 
-        if compact:
-            # Pointer to role files — agent reads on demand when composing
-            lines.append("To adopt a role, read its file from `~/.ai/roles/` and follow its persona.")
-            lines.append("")
-        else:
-            # Full inline content for agents that can't read files
+        if full and not compact:
             lines.append("To adopt a role, follow its persona below.")
             lines.append("")
             for role in project_roles:
@@ -115,13 +163,18 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 lines.append("")
                 lines.append(role.to_prompt())
                 lines.append("")
+        else:
+            lines.append(
+                "To adopt a role, read its file from `~/.ai/roles/` (or project `.ai/roles/`) "
+                "and follow its persona. Use `dotai role <name>` to print a persona."
+            )
+            lines.append("")
 
-    # List available skills, grouped by category
+    # Skills — catalog by default (avoids dumping every workflow into AGENTS.md)
     if project_skills:
         lines.append("## Available Skills")
         lines.append("")
 
-        # Group by category
         from .models import SkillCategory
         categorized: dict[str, list] = {}
         uncategorized: list = []
@@ -149,17 +202,14 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 lines.append(f"- **{skill.name}**{trigger}{role_ref}: {skill.description[:80]}")
             lines.append("")
 
-        if compact:
-            # Claude Code has native slash commands — no need for full inline definitions
-            lines.append("Skills are available as slash commands (e.g. `/run_review`).")
-            lines.append("Folder-based skills may include helper scripts in `scripts/` — prefer these over writing from scratch.")
-            lines.append("")
-        else:
-            lines.append("To run a skill, follow its steps below.")
-            lines.append("Folder-based skills may include helper scripts in `scripts/` — prefer these over writing from scratch.")
-            lines.append("")
+        lines.append(
+            "Skills are available as slash commands after `dotai sync` (e.g. `/run_review`). "
+            "Load a full skill definition with `dotai prompt <skill>` or read the file under "
+            "`~/.ai/skills/`. Folder-based skills may include helper scripts in `scripts/`."
+        )
+        lines.append("")
 
-            # Include full skill definitions so file-based agents (Cursor, etc.) have everything inline
+        if full:
             lines.append("## Skill Definitions")
             lines.append("")
             for skill in project_skills:
@@ -172,13 +222,15 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
     lines.extend([
         "## How to Use",
         "",
-        "1. **Start of session**: Read `~/.ai/rules.md` and the project's `.ai/rules.md`",
-        "2. **Before a task**: Check if a relevant skill exists and adopt its role",
-        "3. **When unsure**: The rules contain conventions, corrections, and project-specific guidance",
+        "1. **Start of session**: Follow **Active Rules** (hard), then freeform `rules.md`, then preference packs (soft)",
+        "2. **Before a task**: Check if a relevant skill exists; load it via slash command or `dotai prompt`",
+        "3. **Capture corrections**: Use `/run_learn` or `dotai learn` so mistakes become permanent rules",
+        "4. **Borrow style**: Preference packs (`dotai prefs use`) are soft taste — never override hard rules",
+        "5. **When unsure**: Structured rules > freeform notes > preference packs; project overrides global",
         "",
         "## Composing Skills with Roles",
         "",
-        "When the user writes `/<skill> as <role>`, adopt the role's full persona",
+        "When the user writes `/<skill> as <role>`, adopt that role's full persona",
         "before executing the skill's steps. The role shapes *how* you think;",
         "the skill defines *what* you do.",
         "",
@@ -198,37 +250,52 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
 
 
 def generate_claude_md_section(config: GlobalConfig, project_name: str | None = None,
-                               project_path: Path | None = None) -> str:
+                               project_path: Path | None = None,
+                               full: bool = False,
+                               extra_prefs: list[str] | None = None) -> str:
     """Generate a section to append to CLAUDE.md.
 
     Uses compact mode since Claude Code can read files and has native
-    slash commands — no need for full inline content.
+    slash commands — no need for full inline content (unless full=True).
     """
-    primer = generate_primer(config, project_name, project_path, compact=True)
+    primer = generate_primer(
+        config, project_name, project_path,
+        compact=not full,
+        full=full,
+        extra_prefs=extra_prefs,
+    )
     return f"""
 # AI Context
 
 {primer}
 
-Read `~/.ai/rules.md` at the start of every conversation.
+Read `~/.ai/rules.md` and structured rules at the start of every conversation.
 """
 
 
 def generate_cursorrules(config: GlobalConfig, project_name: str | None = None,
-                         project_path: Path | None = None) -> str:
+                         project_path: Path | None = None,
+                         full: bool = False,
+                         extra_prefs: list[str] | None = None) -> str:
     """Generate .cursorrules content."""
-    return generate_primer(config, project_name, project_path)
+    return generate_primer(
+        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+    )
 
 
 def generate_gemini_md(config: GlobalConfig, project_name: str | None = None,
-                       project_path: Path | None = None) -> str:
+                       project_path: Path | None = None,
+                       full: bool = False,
+                       extra_prefs: list[str] | None = None) -> str:
     """Generate GEMINI.md for Gemini CLI.
 
     Gemini CLI discovers GEMINI.md files in the project root and
     concatenates them into context. It also reads ~/.gemini/GEMINI.md
     for global instructions.
     """
-    primer = generate_primer(config, project_name, project_path)
+    primer = generate_primer(
+        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+    )
     return f"""# Project Context
 
 {primer}
@@ -239,9 +306,13 @@ Run `dotai sync` to regenerate.
 
 
 def generate_agents_md(config: GlobalConfig, project_name: str | None = None,
-                       project_path: Path | None = None) -> str:
+                       project_path: Path | None = None,
+                       full: bool = False,
+                       extra_prefs: list[str] | None = None) -> str:
     """Generate AGENTS.md (generic agent bootstrap)."""
-    primer = generate_primer(config, project_name, project_path)
+    primer = generate_primer(
+        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+    )
     return f"""# Agent Instructions
 
 {primer}
@@ -249,7 +320,6 @@ def generate_agents_md(config: GlobalConfig, project_name: str | None = None,
 This file is auto-generated by dotai. Do not edit manually.
 Run `dotai sync` to regenerate.
 """
-
 
 def generate_claude_skill_md(skill: Skill, all_roles: list[Role]) -> str:
     """Generate a SKILL.md file for a Claude Code native slash command.
@@ -366,7 +436,9 @@ def _merge_with_markers(existing: str, generated: str) -> str:
         return existing.rstrip() + "\n\n" + block + "\n"
 
 
-def sync_project(project_path: Path, config: GlobalConfig, project_name: str | None = None, agents: list[str] | None = None) -> list[str]:
+def sync_project(project_path: Path, config: GlobalConfig, project_name: str | None = None,
+                 agents: list[str] | None = None, full: bool = False,
+                 extra_prefs: list[str] | None = None) -> list[str]:
     """Write agent bootstrap files into a project directory.
 
     Preserves any existing local content in the target files. dotai-managed
@@ -379,6 +451,10 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
         project_name: Project name for scoped context
         agents: Which agents to generate for. Default: all.
                 Options: "claude", "cursor", "gemini", "generic"
+        full: When True, inline full role personas and skill definitions
+              (larger context). Default is catalog-style for skills/roles
+              with full structured rule bodies.
+        extra_prefs: Session overlay preference pack ids.
 
     Returns:
         List of files written
@@ -397,7 +473,9 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     if "claude" in agents:
         claude_path = project_path / "CLAUDE.md"
-        section = generate_claude_md_section(config, project_name, project_path)
+        section = generate_claude_md_section(
+            config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        )
 
         if claude_path.exists():
             existing = claude_path.read_text()
@@ -417,7 +495,9 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     if "cursor" in agents:
         cursor_path = project_path / ".cursorrules"
-        generated = generate_cursorrules(config, project_name, project_path)
+        generated = generate_cursorrules(
+            config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        )
 
         if cursor_path.exists():
             existing = cursor_path.read_text()
@@ -428,7 +508,9 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     if "gemini" in agents:
         gemini_path = project_path / "GEMINI.md"
-        generated = generate_gemini_md(config, project_name, project_path)
+        generated = generate_gemini_md(
+            config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        )
 
         if gemini_path.exists():
             existing = gemini_path.read_text()
@@ -439,7 +521,9 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     if "generic" in agents:
         agents_path = project_path / "AGENTS.md"
-        generated = generate_agents_md(config, project_name, project_path)
+        generated = generate_agents_md(
+            config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        )
 
         if agents_path.exists():
             existing = agents_path.read_text()

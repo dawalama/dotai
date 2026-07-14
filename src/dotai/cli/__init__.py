@@ -53,6 +53,7 @@ def init(
         (ai_dir / "rules").mkdir(exist_ok=True)
         (ai_dir / "roles").mkdir(exist_ok=True)
         (ai_dir / "skills").mkdir(exist_ok=True)
+        (ai_dir / "preferences").mkdir(exist_ok=True)
         (ai_dir / "tools").mkdir(exist_ok=True)
 
         # Create starter files
@@ -69,7 +70,7 @@ def init(
         save_config(config)
 
         console.print(f"[green]Initialized .ai/ in {project_path}[/green]")
-        console.print(f"  Created: rules.md, roles/, skills/, tools/")
+        console.print(f"  Created: rules.md, roles/, skills/, preferences/, tools/")
 
         # Auto-sync agent config files into the project
         from ..sync import sync_project
@@ -121,8 +122,9 @@ def init(
                 verb = "Updated" if force else "Seeded"
                 console.print(f"  {verb} {copied} skills")
 
-        # Create rules and tools dirs
+        # Create rules, preferences, and tools dirs
         (ai_dir / "rules").mkdir(exist_ok=True)
+        (ai_dir / "preferences").mkdir(exist_ok=True)
         (ai_dir / "tools").mkdir(exist_ok=True)
 
         # Create starter files
@@ -136,13 +138,18 @@ def init(
         console.print(f"  {ai_dir}/rules.md")
         console.print(f"  {ai_dir}/roles/ ({len(list(roles_dir.glob('*.md')))} roles)")
         console.print(f"  {ai_dir}/skills/ ({len(list(skills_dir.glob('*.md')))} skills)")
+        console.print(f"  {ai_dir}/preferences/")
         console.print(f"  {ai_dir}/tools/")
         console.print(f"\n[dim]Next: cd into a project and run `dotai sync` to generate agent configs.[/dim]")
+        console.print(f"[dim]Have an existing CLAUDE.md / AGENTS.md?  `dotai import-agent CLAUDE.md --dry-run`[/dim]")
+        console.print(f"[dim]Capture a correction:  `dotai learn \"title\" -i \"issue\" -c \"correction\" --dry-run`[/dim]")
+        console.print(f"[dim]Borrow style:  `dotai prefs new \"CLI\" --domain cli` then `dotai prefs use cli`[/dim]")
 
 
 # Import submodules to register their commands with the app
 from . import roles_cmd   # noqa: E402, F401
 from . import skills_cmd  # noqa: E402, F401
 from . import rules_cmd   # noqa: E402, F401
+from . import prefs_cmd   # noqa: E402, F401
 from . import sync_cmd    # noqa: E402, F401
 from . import watch_cmd   # noqa: E402, F401
