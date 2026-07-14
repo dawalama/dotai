@@ -11,6 +11,261 @@ from . import app, console
 
 
 @app.command()
+def audit(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Audit rules effective for a registered project"),
+    all: bool = typer.Option(False, "--all", "-a", help="Include disabled rules"),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable report"),
+    fail_on: Optional[str] = typer.Option(None, "--fail-on", help="Exit non-zero at or above: low, medium, high"),
+):
+    """Audit rule quality, overlap, scope, and estimated context cost.
+
+    The audit is deterministic, local, and read-only. No rule content is sent
+    to an external service.
+    """
+    import json
+
+    from ..maintenance import SEVERITY_ORDER, audit_rules
+    from ..store import load_config
+
+    if fail_on and fail_on not in ("low", "medium", "high"):
+        console.print("[red]--fail-on must be one of: low, medium, high[/red]")
+        raise typer.Exit(2)
+
+    config = load_config()
+    if project and not config.get_project(project):
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+    report = audit_rules(config, project_name=project, include_disabled=all)
+
+    if json_output:
+        console.print_json(json.dumps(report.to_dict()))
+    else:
+        console.print(
+            f"[bold]Rule audit[/bold] · {report.scope} · "
+            f"{report.rule_count} rules · ~{report.estimated_tokens} tokens"
+        )
+        top_metrics = report.rule_metrics[:3]
+        if len(top_metrics) >= 2 and report.estimated_tokens:
+            concentrated = sum(metric.estimated_tokens for metric in top_metrics)
+            percentage = concentrated / report.estimated_tokens * 100
+            names = ", ".join(metric.rule_id for metric in top_metrics)
+            console.print(
+                f"[bold]Context concentration:[/bold] top {len(top_metrics)} rules consume "
+                f"~{concentrated} tokens ({percentage:.0f}%): {names}"
+            )
+        recent_metrics = [metric for metric in report.rule_metrics if metric.recent_saved_tokens]
+        if recent_metrics:
+            console.print("[bold]Recent compression:[/bold]")
+            for metric in recent_metrics:
+                percentage = (
+                    metric.recent_saved_tokens / metric.recent_before_tokens * 100
+                    if metric.recent_before_tokens
+                    else 0
+                )
+                console.print(
+                    f"  {metric.rule_id}: ~{metric.recent_before_tokens} → "
+                    f"~{metric.estimated_tokens} tokens "
+                    f"([green]-{metric.recent_saved_tokens}, {percentage:.0f}%[/green])"
+                )
+        if not report.findings:
+            console.print("[green]No deterministic rule quality issues found.[/green]")
+        else:
+            console.print("\n[bold]Findings[/bold]")
+            for finding in report.findings:
+                color = {"high": "red", "medium": "yellow", "low": "blue", "info": "dim"}[finding.severity]
+                console.print(
+                    f"[{color}]{finding.severity.upper()}[/{color}] "
+                    f"[cyan]{finding.code}[/cyan] · {', '.join(finding.rule_ids)}"
+                )
+                console.print(f"  {finding.message}")
+                if finding.evidence:
+                    console.print(f"  [dim]{finding.evidence}[/dim]")
+                console.print(f"  [bold]Next:[/bold] {finding.suggestion}\n")
+
+    if fail_on:
+        threshold = SEVERITY_ORDER[fail_on]
+        if any(SEVERITY_ORDER[finding.severity] >= threshold for finding in report.findings):
+            raise typer.Exit(1)
+
+
+@app.command()
+def compress(
+    action: Optional[str] = typer.Argument(None, help="Optional action: apply"),
+    proposal: Optional[Path] = typer.Argument(None, help="Versioned JSON proposal file for the apply action"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Compress a registered project's local rules"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show candidates without applying exact duplicates"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply an already-approved proposal without another prompt"),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable compression plan"),
+):
+    """Plan compression or safely apply an agent-generated proposal.
+
+    Run without an action to inspect candidates. Use `compress apply FILE` to
+    validate a versioned proposal, show its diffs, back up the rules, and apply
+    only approved changes.
+    """
+    import difflib
+    import json
+    import sys
+
+    from ..maintenance import (
+        apply_compression_plan,
+        build_compression_plan,
+        create_compression_backup,
+        estimate_tokens,
+        finalize_compression_backup,
+        load_compression_proposal,
+        write_reviewed_rule,
+    )
+    from ..store import load_config
+
+    config = load_config()
+    if project and not config.get_project(project):
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+    plan = build_compression_plan(config, project_name=project)
+
+    if action:
+        if action != "apply" or not proposal:
+            console.print("[red]Usage: dotai compress apply <proposal.json> [--project NAME] [--yes][/red]")
+            raise typer.Exit(2)
+        try:
+            loaded = load_compression_proposal(proposal, config, project_name=project)
+        except ValueError as error:
+            console.print(f"[red]Invalid compression proposal: {error}[/red]")
+            raise typer.Exit(1)
+
+        approved = []
+        for change in loaded.changes:
+            original = change.source_path.read_text()
+            before = estimate_tokens(original)
+            after = estimate_tokens(change.content)
+            diff = "".join(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                change.content.splitlines(keepends=True),
+                fromfile=str(change.source_path),
+                tofile=f"{change.source_path} (proposed)",
+            ))
+            console.print(
+                f"\n[bold]{change.rule_id}[/bold] · ~{before} → ~{after} tokens "
+                f"([green]-{max(0, before - after)}[/green])"
+            )
+            console.print(diff or "[dim]No textual change.[/dim]")
+            if change.content == original:
+                continue
+            if yes or typer.confirm("Apply this compression?", default=False):
+                approved.append(change)
+
+        if not approved:
+            console.print("\n[dim]No changes approved.[/dim]")
+            return
+        backup_path = create_compression_backup(config, plan, project_name=project)
+        console.print(f"[bold]Backup created:[/bold] {backup_path}")
+        changed = 0
+        for change in approved:
+            try:
+                write_reviewed_rule(
+                    config,
+                    project_name=project,
+                    rule_path=change.source_path,
+                    content=change.content,
+                    backup_path=backup_path,
+                    expected_sha256=change.original_sha256,
+                )
+            except (OSError, ValueError) as error:
+                console.print(f"[red]Could not apply {change.rule_id}: {error}[/red]")
+                continue
+            changed += 1
+            console.print(f"[green]Applied:[/green] {change.rule_id}")
+        manifest = finalize_compression_backup(
+            config,
+            backup_path,
+            project_name=project,
+        )
+        console.print(f"\n[green]Compression complete: {changed} rule(s) changed.[/green]")
+        for change in manifest["changes"]:
+            console.print(
+                f"  {change['rule_id']}: ~{change['before_tokens']} → "
+                f"~{change['after_tokens']} tokens "
+                f"([green]-{change['saved_tokens']}[/green])"
+            )
+        console.print(
+            f"[bold]Actual context:[/bold] ~{manifest['actual_tokens_before']} → "
+            f"~{manifest['actual_tokens_after']} tokens "
+            f"([green]-{manifest['actual_tokens_saved']}[/green])"
+        )
+        console.print(f"[bold]Backup:[/bold] {backup_path}")
+        return
+
+    if json_output:
+        console.print_json(json.dumps(plan.to_dict()))
+    else:
+        saved = plan.estimated_tokens_before - plan.estimated_tokens_after
+        manual = [action for action in plan.actions if not action.automatic]
+        manual_low = sum(action.estimated_tokens_saved_low for action in manual)
+        manual_high = sum(action.estimated_tokens_saved_high for action in manual)
+        console.print(
+            f"[bold]Compression plan[/bold] · {plan.scope} · {plan.rule_count} rules"
+        )
+        if saved:
+            console.print(
+                f"Safe automatic context: ~{plan.estimated_tokens_before} → "
+                f"~{plan.estimated_tokens_after} tokens ([green]-{saved}[/green])"
+            )
+        else:
+            console.print(
+                f"Estimated context: ~{plan.estimated_tokens_before} tokens · "
+                "no safe automatic savings"
+            )
+        if manual:
+            savings = (
+                f" · potential manual savings ~{manual_low}-{manual_high} tokens"
+                if manual_high
+                else ""
+            )
+            console.print(f"[yellow]{len(manual)} review candidate(s)[/yellow]{savings}")
+        if not plan.actions:
+            console.print("[green]No safe automatic changes or review candidates found.[/green]")
+        else:
+            console.print("\n[bold]Actions[/bold]")
+            for action in plan.actions:
+                if action.estimated_tokens_saved:
+                    savings = f"~{action.estimated_tokens_saved}"
+                elif action.estimated_tokens_saved_high:
+                    savings = (
+                        f"~{action.estimated_tokens_saved_low}-"
+                        f"{action.estimated_tokens_saved_high}"
+                    )
+                else:
+                    savings = ""
+                mode = "[green]APPLY[/green]" if action.automatic else "[yellow]REVIEW[/yellow]"
+                savings_text = f" · potential savings {savings} tokens" if savings else ""
+                console.print(
+                    f"{mode} [cyan]{action.action}[/cyan] · "
+                    f"{', '.join(action.rule_ids)}{savings_text}"
+                )
+                console.print(f"  {action.message}\n")
+
+    if json_output or dry_run or not plan.automatic_actions:
+        if plan.actions and not json_output:
+            console.print("[dim]Use `/run_compress` in a synced coding agent to draft and review semantic changes.[/dim]")
+        return
+    if not sys.stdin.isatty():
+        console.print("[dim]Exact duplicates found; run in a terminal to approve their removal.[/dim]")
+        return
+    if typer.confirm(
+        f"Apply {len(plan.automatic_actions)} exact-duplicate action(s)?",
+        default=False,
+    ):
+        try:
+            result = apply_compression_plan(config, plan, project_name=project)
+        except (OSError, ValueError) as error:
+            console.print(f"[red]Compression aborted: {error}[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]Removed {len(result.removed_paths)} exact duplicate rule(s).[/green]")
+        console.print(f"[bold]Backup:[/bold] {result.backup_path}")
+
+
+@app.command()
 def rules(
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Show rules resolved for a project"),
     all: bool = typer.Option(False, "--all", "-a", help="Show all rules including disabled"),

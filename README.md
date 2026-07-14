@@ -130,6 +130,7 @@ After `dotai sync`, skills appear as native slash commands:
 > /run_careful                         # Enter production-safety mode
 > /run_verify                          # Run tests, types, lint, build
 > /run_learn                           # Capture a mistake as a permanent rule
+> /run_compress                        # Draft and review smaller rule definitions
 ```
 
 ### Using skills outside Claude Code
@@ -181,6 +182,41 @@ dotai rules --check
 ```
 
 The feedback loop: **vibe-code → agent makes mistake → `/run_learn` → structured rule → `dotai sync` → agent never repeats it.**
+
+### Keeping rules healthy
+
+Knowledge gets noisy as it grows. `dotai audit` reviews the effective ruleset locally and deterministically—nothing is sent to an external model.
+
+```bash
+# Find weak, generic, preference-like, oversized, or overlapping rules
+dotai audit
+dotai audit --project my-app
+
+# Machine-readable output or a CI quality gate
+dotai audit --json
+dotai audit --fail-on high
+```
+
+The report includes stable finding codes, evidence, suggested actions, an estimated prompt-token cost, and a context-concentration summary showing which rules dominate the budget. Large-rule findings show the rule's share of total context, change risk, reviewable sections, and a conservative manual-savings range. Security and other high-consequence rules receive preservation-first guidance and are deliberately protected from “the model probably knows this” recommendations.
+
+`dotai compress` turns high-confidence findings into a conservative plan. Semantic rewriting is handled by the active coding agent, not a hidden provider inside the CLI:
+
+```bash
+# Inspect candidates
+dotai compress
+
+# Ask the current coding agent to draft, diff, and review changes
+> /run_compress
+
+# Low-level application boundary for an approved versioned proposal
+dotai compress apply proposal.json
+```
+
+`/run_compress` reads the JSON plan, drafts shorter complete rules, explains what it preserved and consolidated, shows the full diff in conversation, and asks `Apply this compression? [y/N]`. It then passes only approved changes to dotai. Near-duplicates, generic guidance, and rules that may belong in a preference pack remain suggestions unless the developer explicitly approves a concrete proposal.
+
+When no exact duplicates exist, compression says there are no **safe automatic** savings while still listing semantic review candidates and their estimated savings. These estimates are directional—they help prioritize review. The CLI never invents a semantic rewrite or calls an external provider.
+
+Proposal files are versioned and bound to the original rule with a SHA-256 hash, so stale or renamed rules are rejected. Before applying approved changes, dotai validates every proposed rule and creates a complete timestamped snapshot under the applicable `.ai/backups/<timestamp>-compress/`. After writing, the manifest is finalized with actual before/after hashes, per-rule token savings, total savings, and completion status. Subsequent audits show recently compressed rules and clearly note when a successful reduction remains above the large-rule threshold. Backups are ordinary local files and are never deleted automatically.
 
 ### Migrating existing agent files
 
@@ -303,6 +339,7 @@ dotai init ~/other-project
 ├── preferences/                # Soft taste packs (borrowable style priors)
 │   └── cli.md                  # Example: CLI stack / micro-style
 ├── preferences-active.json     # Which preference packs are active
+├── backups/                    # Local snapshots created before compression writes
 ├── roles/                      # Cognitive modes
 │   ├── reviewer.md             # Paranoid staff engineer
 │   ├── architect.md            # Systems thinker
@@ -327,6 +364,7 @@ dotai init ~/other-project
 │   ├── verify.md               # Run tests, types, lint (/run_verify)
 │   ├── plan.md                 # Structured planning workflow (/run_plan)
 │   ├── learn.md                # Capture learnings as rules (/run_learn)
+│   ├── compress.md             # Review semantic rule compression (/run_compress)
 │   └── deploy/                 # Folder-based skill (with scripts & assets)
 │       ├── main.md
 │       ├── scripts/
@@ -704,6 +742,9 @@ dotai prompt <skill> [--role <role>]   # Assemble skill + role prompt for any ag
 dotai sync [path] [--agents ...] [--full]  # Sync ~/.ai/ into agent config files
 dotai primer [--project <name>] [--full|--compact]  # Print agent context to stdout
 dotai rules [-p project] [-a] [--check]    # List rules (or audit quality)
+dotai audit [-p project] [--json] [--fail-on severity]  # Read-only rule audit
+dotai compress [-p project] [--json]       # Plan compression candidates
+dotai compress apply <proposal.json> [--yes]  # Validate, back up, and apply proposals
 dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-project
 dotai learn "title" -i "..." -c "..."  # Create structured rule (default)
 dotai learn "title" -i "..." -c "..." --dry-run|--sync|--force|--append-md
