@@ -1,28 +1,62 @@
 # dotai
 
-Universal AI context for any coding agent. Roles, skills, and rules in `~/.ai/`.
+**Your coding agents should remember what you taught them.**
 
-## The Problem
+dotai gives Claude, Cursor, Gemini, Codex, and other coding agents one shared memory for how you build software. Keep your rules, workflows, and engineering taste in `~/.ai/`; sync them into any project with one command.
 
-Every AI coding tool has its own way to store context:
+```text
+                         ┌─ CLAUDE.md + native slash commands
+~/.ai/ ── dotai sync ───┼─ .cursorrules
+                         ├─ GEMINI.md
+                         └─ AGENTS.md
+```
 
-- Claude Code → `CLAUDE.md`
-- Cursor → `.cursorrules`
-- Gemini CLI → `GEMINI.md`
-- Codex / Copilot → `AGENTS.md`
+No server. No account. No proprietary memory layer. Just portable Markdown that you own.
 
-Your knowledge about how to write code, review it, ship it, and debug it gets scattered across tool-specific formats — or worse, stays in your head.
+## Stop reteaching every agent
 
-## The Solution
+You tell one agent “never call `useEffect` directly.” Next week, a different agent does exactly that. Your review checklist lives in one tool, your deployment workflow in another, and the correction you made yesterday disappears with the chat.
 
-`dotai` defines a universal `~/.ai/` directory convention that any tool can consume. It ships with:
+dotai turns those corrections into durable, reusable context:
 
-- **Roles** — Cognitive modes that shift how the AI thinks (reviewer, architect, founder, QA, etc.)
-- **Skills** — Reusable workflows with steps, inputs, gotchas, and role references
-- **Rules** — Structured coding standards with per-project toggles and file-pattern scoping (hard constraints)
-- **Preference packs** — Soft, borrowable taste (CLI stack, design micro-style); never override hard rules
-- **Agent sync** — Generate `CLAUDE.md`, `.cursorrules`, `GEMINI.md`, or `AGENTS.md` from your `~/.ai/`
-- **Native slash commands** — For Claude Code, skills become real `/run_*` commands automatically
+- **Rules are hard constraints.** Capture coding standards and scope them by project or file pattern.
+- **Skills are repeatable workflows.** Plan, investigate, review, verify, and ship the same way every time.
+- **Roles change how the agent thinks.** Review as a security engineer; plan as a product manager.
+- **Preference packs carry your taste.** Share softer choices without weakening hard rules.
+- **Sync speaks each agent's language.** Generate the bootstrap file that Claude, Cursor, Gemini, or Codex already understands.
+
+The useful part is the feedback loop:
+
+```text
+agent makes a mistake → capture the correction → sync → every agent learns it
+```
+
+## See it in action
+
+```bash
+# Set up your global knowledge base
+dotai init
+
+# Teach every agent a correction you never want to repeat
+dotai learn "no-print-debugging" \
+  --issue "Debug output was left in production code" \
+  --correction "Use structured logging and remove temporary debug output" \
+  --globs "*.py"
+
+# Bring that knowledge into a project
+cd ~/my-project
+dotai sync
+```
+
+Now the rule is available to every supported agent, alongside reusable commands such as:
+
+```text
+/run_plan as product-manager
+/run_investigate as debugger
+/run_review as security-engineer
+/run_verify
+/run_ship
+```
 
 ## Installation
 
