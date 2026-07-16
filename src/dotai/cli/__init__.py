@@ -38,7 +38,7 @@ def init(
 
     Use --force to re-seed after upgrading dotai (overwrites seed files, keeps your custom files).
     """
-    from ..store import load_config, save_config
+    from ..store import get_config_dir, load_config, save_config
     from ..models import ProjectConfig
 
     if project:
@@ -72,9 +72,13 @@ def init(
         console.print(f"[green]Initialized .ai/ in {project_path}[/green]")
         console.print(f"  Created: rules.md, roles/, skills/, preferences/, tools/")
 
-        # Auto-sync agent config files into the project
-        from ..sync import sync_project
-        written = sync_project(project_path, config, project_path.name)
+        # Prepare context without silently taking ownership of team agent files.
+        from ..sync import plan_sync, sync_local_context, sync_project
+        plan = plan_sync(project_path, get_config_dir())
+        if plan.mode == "local":
+            written = sync_local_context(plan, config, project_path.name)
+        else:
+            written = sync_project(project_path, config, project_path.name)
         for f in written:
             console.print(f"  [green]Synced[/green] {f}")
     else:
@@ -153,3 +157,4 @@ from . import rules_cmd   # noqa: E402, F401
 from . import prefs_cmd   # noqa: E402, F401
 from . import sync_cmd    # noqa: E402, F401
 from . import watch_cmd   # noqa: E402, F401
+from . import agents_cmd  # noqa: E402, F401

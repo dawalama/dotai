@@ -2,13 +2,21 @@
 
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from dotai.cli import app
 from dotai.models import GlobalConfig, ProjectConfig, Role, Skill, SkillCategory
 from dotai.sync import (
     DOTAI_MARKER_END,
     DOTAI_MARKER_START,
     _merge_with_markers,
+    apply_detach,
     generate_claude_skill_md,
     generate_primer,
+    find_git_root,
+    plan_detach,
+    plan_sync,
+    sync_local_context,
     sync_project,
 )
 
@@ -43,10 +51,20 @@ class TestGeneratePrimer:
         assert "# AI Knowledge Base" in primer
         assert "~/.ai/" in primer
 
+    def test_compact_references_freeform_without_inlining(self, ai_dir, config):
+        primer = generate_primer(config, compact=True)
+        assert str(ai_dir / "rules.md") in primer
+        assert "- Write clear code" not in primer
+        assert "dotai context --path . --files <paths>" in primer
+
     def test_includes_roles(self, ai_dir, config, sample_role_file):
         primer = generate_primer(config)
         assert "Test Reviewer" in primer
         assert "## Available Roles" in primer
+
+    def test_compact_includes_role_pointer(self, ai_dir, config, sample_role_file):
+        primer = generate_primer(config, compact=True)
+        assert str(sample_role_file) in primer
 
     def test_includes_skills(self, ai_dir, config, sample_skill_file):
         primer = generate_primer(config)
@@ -152,3 +170,209 @@ class TestSyncProject:
         sample_skill_file.unlink()
         sync_project(project_dir, config, agents=["claude"])
         assert not (project_dir / ".claude" / "skills" / "run_test").exists()
+
+
+class TestLocalSync:
+    def test_git_repo_defaults_to_local(self, tmp_path, monkeypatch):
+        project = tmp_path / "repo"
+        project.mkdir()
+        monkeypatch.setattr("dotai.sync.find_git_root", lambda path: project)
+        plan = plan_sync(project, tmp_path / "config")
+        assert plan.mode == "local"
+        assert plan.target_path.parent == tmp_path / "config" / "contexts"
+
+    def test_explicit_shared_targets_project(self, project_dir, tmp_path):
+        plan = plan_sync(project_dir, tmp_path / "config", requested_mode="shared")
+        assert plan.mode == "shared"
+        assert plan.target_path == project_dir
+
+    def test_local_sync_preserves_team_files(
+        self, ai_dir, tmp_path, config, monkeypatch, sample_rule_file
+    ):
+        project = tmp_path / "repo"
+        project.mkdir()
+        monkeypatch.setattr("dotai.sync.find_git_root", lambda path: project)
+        claude = project / "CLAUDE.md"
+        claude.write_text("# Team Rules\n\nUse the team formatter.\n")
+        team_before = claude.read_bytes()
+
+        plan = plan_sync(
+            project, tmp_path / "config", agents=["claude"], requested_mode="local"
+        )
+        written = sync_local_context(plan, config)
+
+        assert claude.read_bytes() == team_before
+        assert not (project / ".claude").exists()
+        context = (plan.target_path / "CLAUDE.md").read_text()
+        assert "Team Instructions (CLAUDE.md) — Authoritative" in context
+        assert "Use the team formatter." in context
+        assert "Personal dotai Context — Supplemental" in context
+        assert "no-console-log" in context
+        assert "Remove all `console.log` statements" not in context
+        assert str(plan.target_path / "manifest.json") in written
+
+    def test_local_sync_strips_old_dotai_block_from_team_layer(self, ai_dir, tmp_path, config, monkeypatch):
+        project = tmp_path / "repo"
+        project.mkdir()
+        monkeypatch.setattr("dotai.sync.find_git_root", lambda path: project)
+        (project / "CLAUDE.md").write_text(
+            f"Team\n{DOTAI_MARKER_START}\nOld personal content\n{DOTAI_MARKER_END}\nAfter\n"
+        )
+        plan = plan_sync(
+            project, tmp_path / "config", agents=["claude"], requested_mode="local"
+        )
+        sync_local_context(plan, config)
+        context = (plan.target_path / "CLAUDE.md").read_text()
+        team_section = context.split("## Personal dotai Context", 1)[0]
+        assert "Team" in team_section and "After" in team_section
+        assert "Old personal content" not in team_section
+
+    def test_local_sync_reads_team_file_from_git_root(
+        self, ai_dir, tmp_path, config, monkeypatch
+    ):
+        project = tmp_path / "repo"
+        nested = project / "packages" / "api"
+        nested.mkdir(parents=True)
+        (project / "CLAUDE.md").write_text("# Root Team Rules\n")
+        monkeypatch.setattr("dotai.sync.find_git_root", lambda path: project)
+
+        plan = plan_sync(
+            nested, tmp_path / "config", agents=["claude"], requested_mode="local"
+        )
+        sync_local_context(plan, config)
+
+        context = (plan.target_path / "CLAUDE.md").read_text()
+        assert "Root Team Rules" in context
+
+
+class TestSyncErrors:
+    def test_missing_git_is_treated_as_no_repository(self, tmp_path, monkeypatch):
+        def missing_git(*args, **kwargs):
+            raise FileNotFoundError
+
+        monkeypatch.setattr("dotai.sync.subprocess.run", missing_git)
+
+        assert find_git_root(tmp_path) is None
+
+    def test_sync_unknown_agent_is_friendly(self):
+        result = CliRunner().invoke(app, ["sync", "--agents", "unknown"])
+
+        assert result.exit_code == 2
+        assert "Unknown agent(s): unknown" in result.output
+        assert "Traceback" not in result.output
+
+    def test_context_receipt_failure_still_prints_context(
+        self, ai_dir, config_dir, monkeypatch
+    ):
+        from dotai import store
+
+        monkeypatch.setattr(store, "_config_dir", config_dir)
+        monkeypatch.setattr(
+            "dotai.context.save_resolution_receipt",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                OSError("read-only receipt directory")
+            ),
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["context", "--path", str(ai_dir.parent), "--agent", "claude"],
+        )
+
+        assert result.exit_code == 0
+        assert "# Resolved dotai Context" in result.stdout
+        assert "receipt was not saved" in result.stderr
+
+
+class TestDetach:
+    def test_preview_finds_only_proven_dotai_artifacts(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(
+            f"# Team\n\nKeep this.\n\n{DOTAI_MARKER_START}\nGenerated\n{DOTAI_MARKER_END}\n"
+        )
+        (project / "AGENTS.md").write_text("# Team-owned and unmarked\n")
+        generated = project / ".claude" / "skills" / "run_test"
+        generated.mkdir(parents=True)
+        (generated / "SKILL.md").write_text("<!-- Auto-generated by dotai. -->\n")
+        team_skill = project / ".claude" / "skills" / "team_skill"
+        team_skill.mkdir()
+        (team_skill / "SKILL.md").write_text("# Team Skill\n")
+
+        actions = plan_detach(project)
+
+        assert [(a.kind, a.action, a.path.name) for a in actions] == [
+            ("agent-file", "update", "CLAUDE.md"),
+            ("claude-skill", "delete", "run_test"),
+        ]
+        assert actions[0].new_content == "# Team\n\nKeep this.\n"
+
+    def test_marker_only_file_is_deleted(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / "GEMINI.md").write_text(
+            f"{DOTAI_MARKER_START}\nGenerated\n{DOTAI_MARKER_END}\n"
+        )
+
+        actions = plan_detach(project)
+
+        assert len(actions) == 1
+        assert actions[0].action == "delete"
+
+    def test_all_marker_blocks_are_removed(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(
+            f"Before\n{DOTAI_MARKER_START}\nOne\n{DOTAI_MARKER_END}\n"
+            f"Middle\n{DOTAI_MARKER_START}\nTwo\n{DOTAI_MARKER_END}\nAfter\n"
+        )
+
+        action = plan_detach(project)[0]
+
+        assert action.new_content == "Before\n\nMiddle\n\nAfter\n"
+
+    def test_incomplete_marker_is_never_removed(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(
+            f"Team\n{DOTAI_MARKER_START}\nUnclosed content\n"
+        )
+
+        assert plan_detach(project) == []
+
+    def test_symlinked_artifacts_are_never_followed(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text(
+            f"{DOTAI_MARKER_START}\nGenerated\n{DOTAI_MARKER_END}\n"
+        )
+        (project / "CLAUDE.md").symlink_to(outside)
+
+        assert plan_detach(project) == []
+
+    def test_apply_backs_up_before_cleanup(self, tmp_path):
+        project = tmp_path / "repo"
+        project.mkdir()
+        claude = project / "CLAUDE.md"
+        original = (
+            f"# Team\n\n{DOTAI_MARKER_START}\nGenerated\n{DOTAI_MARKER_END}\n"
+        )
+        claude.write_text(original)
+        skill = project / ".claude" / "skills" / "run_test"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("<!-- Auto-generated by dotai. -->\n")
+
+        changed, backup_dir = apply_detach(
+            plan_detach(project), tmp_path / "backups"
+        )
+
+        assert changed == [str(claude), str(skill)]
+        assert claude.read_text() == "# Team\n"
+        assert not skill.exists()
+        backups = list(backup_dir.iterdir())
+        assert (backup_dir / "manifest.json") in backups
+        assert any(path.is_file() and path.read_text() == original for path in backups)
+        assert any(
+            path.is_dir() and (path / "SKILL.md").exists() for path in backups
+        )

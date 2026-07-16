@@ -1,5 +1,6 @@
-"""CLI commands for sync, primer, index, tree, and search."""
+"""CLI commands for sync, context, primer, index, tree, and search."""
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -23,16 +24,21 @@ def sync(
         "--with-prefs",
         help="Comma-separated preference pack ids to activate for this sync only (session overlay)",
     ),
+    local: bool = typer.Option(False, "--local", help="Write personal context outside the repository"),
+    shared: bool = typer.Option(False, "--shared", help="Explicitly update repository agent files"),
+    check: bool = typer.Option(False, "--check", help="Show the resolved mode and paths without writing"),
 ):
-    """Sync ~/.ai/ knowledge into agent-specific config files.
+    """Prepare ~/.ai/ knowledge for coding agents.
 
-    Generates CLAUDE.md, .cursorrules, GEMINI.md, and/or AGENTS.md with
-    structured rules (full bodies), freeform rules.md, active preference packs,
-    and catalogs of roles/skills. Use --full to dump complete skill definitions
-    and role personas into those files.
+    Git repositories default to local context stored outside the worktree.
+    Use --shared only when the team intends to update repository agent files.
     """
-    from ..store import load_config
-    from ..sync import sync_project
+    from ..store import get_config_dir, load_config
+    from ..sync import plan_sync, sync_local_context, sync_project
+
+    if local and shared:
+        console.print("[red]Choose either --local or --shared, not both.[/red]")
+        raise typer.Exit(2)
 
     config = load_config()
     project_path = Path(path).expanduser().resolve()
@@ -41,21 +47,81 @@ def sync(
     project_config = next((p for p in config.projects if p.path == project_path), None)
     project_name = project_config.name if project_config else None
 
-    agent_list = agents.split(",") if agents else None
+    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else None
     extra = [p.strip() for p in with_prefs.split(",")] if with_prefs else None
-    written = sync_project(
-        project_path, config, project_name, agent_list, full=full, extra_prefs=extra
-    )
+    requested_mode = "local" if local else "shared" if shared else "auto"
+    try:
+        plan = plan_sync(project_path, get_config_dir(), agent_list, requested_mode)
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from error
+
+    console.print(f"Mode: [bold]{plan.mode}[/bold]")
+    console.print(f"Project: {plan.project_path}")
+    console.print(f"Target: {plan.target_path}")
+    if plan.mode == "local":
+        console.print("[dim]Team agent files remain untouched; team instructions take precedence.[/dim]")
+        console.print("[dim]Use `dotai primer --path .` or an agent adapter to load this context.[/dim]")
+    else:
+        console.print("[yellow]Shared mode updates repository-owned agent files.[/yellow]")
+    if check:
+        return
+
+    if plan.mode == "local":
+        written = sync_local_context(
+            plan, config, project_name, full=full, extra_prefs=extra
+        )
+    else:
+        written = sync_project(
+            project_path, config, project_name, plan.agents, full=full, extra_prefs=extra
+        )
 
     for f in written:
         console.print(f"  [green]Synced[/green] {f}")
 
 
 @app.command()
+def detach(
+    path: str = typer.Argument(".", help="Repository path to detach from dotai shared sync"),
+    apply: bool = typer.Option(False, "--apply", help="Back up and apply the displayed cleanup"),
+):
+    """Remove old shared-sync artifacts once; preview by default.
+
+    Only marker-delimited dotai blocks and dotai-marked Claude skills are
+    eligible. Team-authored and unmarked content is never removed.
+    """
+    from ..store import get_config_dir
+    from ..sync import apply_detach, plan_detach
+
+    project_path = Path(path).expanduser().resolve()
+    actions = plan_detach(project_path)
+    console.print(f"Detach plan · {project_path}")
+    if not actions:
+        console.print("[green]No dotai-managed repository artifacts found.[/green]")
+        return
+
+    for action in actions:
+        verb = "UPDATE" if action.action == "update" else "DELETE"
+        console.print(f"  [yellow]{verb}[/yellow] {action.kind} · {action.path}")
+
+    if not apply:
+        console.print(
+            "\n[dim]Preview only. Run `dotai detach --apply` to back up and apply this plan.[/dim]"
+        )
+        return
+
+    changed, backup_dir = apply_detach(
+        actions, get_config_dir() / "backups" / "detach"
+    )
+    console.print(f"\n[green]Detached {len(changed)} artifact(s).[/green]")
+    console.print(f"Backup: {backup_dir}")
+
+
+@app.command()
 def primer(
     project: Optional[str] = typer.Option(None, help="Scope to a specific project"),
+    path: Optional[str] = typer.Option(None, "--path", help="Resolve project context from this path"),
     full: bool = typer.Option(False, "--full", help="Include full role personas and skill definitions"),
-    compact: bool = typer.Option(False, "--compact", help="Summaries + file paths only (for agents that can read files)"),
     with_prefs: Optional[str] = typer.Option(
         None,
         "--with-prefs",
@@ -67,8 +133,80 @@ def primer(
     from ..sync import generate_primer
 
     config = load_config()
+    project_path = Path(path).expanduser().resolve() if path else None
+    if project_path:
+        matched = next((p for p in config.projects if p.path == project_path), None)
+        if matched:
+            project = matched.name
     extra = [p.strip() for p in with_prefs.split(",")] if with_prefs else None
-    console.print(generate_primer(config, project, compact=compact, full=full, extra_prefs=extra))
+    typer.echo(generate_primer(
+        config, project, project_path=project_path,
+        compact=not full, full=full, extra_prefs=extra,
+    ))
+
+
+@app.command("context")
+def resolve_task_context(
+    path: str = typer.Option(".", "--path", help="Project path used for scoped context"),
+    task: str = typer.Option("", "--task", help="Current task; routes only unambiguous skill aliases"),
+    files: Optional[str] = typer.Option(None, "--files", help="Comma-separated affected file paths"),
+    contexts: Optional[str] = typer.Option(None, "--context", help="Comma-separated explicit contexts/tags"),
+    domains: Optional[str] = typer.Option(None, "--domain", help="Comma-separated active preference domains to load"),
+    skill: Optional[str] = typer.Option(None, "--skill", help="Skill id, name, or trigger to load fully"),
+    role: Optional[str] = typer.Option(None, "--role", help="Role id or name to load fully"),
+    rules: Optional[str] = typer.Option(None, "--rule", help="Comma-separated rule ids to load fully"),
+    with_prefs: Optional[str] = typer.Option(None, "--with-prefs", help="Session preference pack overlay ids"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Record a local invocation receipt for an adapter", hidden=True
+    ),
+):
+    """Resolve only the rules, preferences, skill, and role needed for a task."""
+    from ..context import resolve_context, save_resolution_receipt
+    from ..store import get_config_dir, load_config
+
+    def split(raw: Optional[str]) -> list[str]:
+        return [value.strip() for value in raw.split(",") if value.strip()] if raw else []
+
+    config = load_config()
+    project_path = Path(path).expanduser().resolve()
+    matched = next((p for p in config.projects if p.path == project_path), None)
+    project_name = matched.name if matched else None
+    try:
+        resolved = resolve_context(
+            config,
+            project_path,
+            project_name,
+            task=task,
+            files=split(files),
+            contexts=split(contexts),
+            domains=split(domains),
+            skill_id=skill,
+            role_id=role,
+            rule_ids=split(rules),
+            extra_prefs=split(with_prefs),
+        )
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from error
+
+    if agent:
+        try:
+            save_resolution_receipt(
+                resolved, agent, get_config_dir() / "receipts"
+            )
+        except (ValueError, OSError) as error:
+            typer.echo(
+                f"Warning: context resolved, but receipt was not saved: {error}",
+                err=True,
+            )
+
+    if json_output:
+        typer.echo(json.dumps(resolved.to_dict(), indent=2))
+    else:
+        typer.echo(resolved.to_prompt(), nl=False)
+
+
 @app.command()
 def index(
     refresh: bool = typer.Option(False, "--refresh", "-r", help="Force rebuild"),

@@ -12,6 +12,7 @@ from . import app, console
 def watch(
     path: str = typer.Argument(".", help="Project path to sync into"),
     agents: Optional[str] = typer.Option(None, help="Comma-separated: claude,cursor,gemini,generic"),
+    shared: bool = typer.Option(False, "--shared", help="Explicitly update repository agent files"),
 ):
     """Watch ~/.ai/ for changes and auto-resync agent config files.
 
@@ -21,8 +22,8 @@ def watch(
     from watchdog.events import FileSystemEventHandler
     import time
 
-    from ..store import load_config
-    from ..sync import sync_project
+    from ..store import get_config_dir, load_config
+    from ..sync import plan_sync, sync_local_context, sync_project
 
     project_path = Path(path).expanduser().resolve()
 
@@ -35,7 +36,15 @@ def watch(
     if project_ai.exists():
         watch_dirs.append(project_ai)
 
-    agent_list = agents.split(",") if agents else None
+    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else None
+    try:
+        plan = plan_sync(
+            project_path, get_config_dir(), agent_list,
+            requested_mode="shared" if shared else "auto",
+        )
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from error
 
     def do_sync():
         """Run sync and report results."""
@@ -43,7 +52,10 @@ def watch(
             cfg = load_config()
             project_config = next((p for p in cfg.projects if p.path == project_path), None)
             project_name = project_config.name if project_config else None
-            written = sync_project(project_path, cfg, project_name, agent_list)
+            if plan.mode == "local":
+                written = sync_local_context(plan, cfg, project_name)
+            else:
+                written = sync_project(project_path, cfg, project_name, plan.agents)
             for f in written:
                 console.print(f"  [green]Synced[/green] {f}")
         except Exception as e:
@@ -85,6 +97,8 @@ def watch(
     # Initial sync
     console.print(f"[bold]Watching for changes...[/bold]")
     console.print(f"  Project: {project_path}")
+    console.print(f"  Mode: {plan.mode}")
+    console.print(f"  Target: {plan.target_path}")
     for d in watch_dirs:
         console.print(f"  Watching: {d}")
     console.print(f"  Press Ctrl+C to stop.\n")

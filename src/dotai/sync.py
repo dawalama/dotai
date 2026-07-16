@@ -8,14 +8,221 @@ how to find and use the knowledge in ~/.ai/. Supports:
   - Generic:      AGENTS.md (works with Codex, Copilot, etc.)
 """
 
+import hashlib
+import json
 import shutil
+import subprocess
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, cast
 
-from .models import GlobalConfig, Skill, Role
+from .models import GlobalConfig, Role, Skill
 from .preferences import format_preferences_section, resolve_preference_packs
 from .roles import load_all_roles
 from .rules import load_rules_from_dir, load_rules_md, resolve_rules_for_project
 from .skills import load_all_skills
+
+SyncMode = Literal["local", "shared"]
+
+
+@dataclass(frozen=True)
+class SyncPlan:
+    """Resolved sync behavior before any files are written."""
+
+    mode: SyncMode
+    project_path: Path
+    target_path: Path
+    git_root: Path | None
+    agents: list[str]
+
+
+@dataclass(frozen=True)
+class DetachAction:
+    """One safe removal of previously generated repository context."""
+
+    path: Path
+    action: Literal["update", "delete"]
+    kind: Literal["agent-file", "claude-skill"]
+    new_content: str | None = None
+
+
+TEAM_INSTRUCTION_FILES = {
+    "claude": "CLAUDE.md",
+    "cursor": ".cursorrules",
+    "gemini": "GEMINI.md",
+    "generic": "AGENTS.md",
+}
+
+
+def find_git_root(project_path: Path) -> Path | None:
+    """Return the containing Git root without inspecting remotes or changing state."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def local_context_dir(project_path: Path, config_dir: Path) -> Path:
+    """Return a stable, user-local cache path for a repository context."""
+    identity = str(project_path.resolve()).encode()
+    repo_id = f"{project_path.name}-{hashlib.sha256(identity).hexdigest()[:12]}"
+    return config_dir / "contexts" / repo_id
+
+
+def plan_sync(project_path: Path, config_dir: Path,
+              agents: list[str] | None = None,
+              requested_mode: str = "auto") -> SyncPlan:
+    """Resolve auto/local/shared sync without writing anything."""
+    project_path = project_path.resolve()
+    git_root = find_git_root(project_path)
+    if requested_mode not in {"auto", "local", "shared"}:
+        raise ValueError(f"Unknown sync mode: {requested_mode}")
+    mode = cast(SyncMode, (
+        requested_mode if requested_mode != "auto"
+        else ("local" if git_root else "shared")
+    ))
+    selected_agents = agents if agents is not None else list(TEAM_INSTRUCTION_FILES)
+    unknown = sorted(set(selected_agents) - set(TEAM_INSTRUCTION_FILES))
+    if unknown:
+        raise ValueError(f"Unknown agent(s): {', '.join(unknown)}")
+    target = local_context_dir(git_root or project_path, config_dir) if mode == "local" else project_path
+    return SyncPlan(mode, project_path, target, git_root, selected_agents)
+
+
+def _without_dotai_section(text: str) -> str:
+    """Remove an existing generated block before treating a file as team guidance."""
+    cleaned, _ = _remove_dotai_sections(text)
+    return cleaned.strip()
+
+
+def _remove_dotai_sections(text: str) -> tuple[str, int]:
+    """Remove all complete marker blocks while preserving surrounding content."""
+    rest = text
+    parts: list[str] = []
+    removed = 0
+    while DOTAI_MARKER_START in rest:
+        before, _, after_start = rest.partition(DOTAI_MARKER_START)
+        if DOTAI_MARKER_END not in after_start:
+            break
+        _, _, after = after_start.partition(DOTAI_MARKER_END)
+        parts.append(before.rstrip())
+        rest = after.lstrip("\n")
+        removed += 1
+    parts.append(rest.rstrip())
+    cleaned = "\n\n".join(part for part in parts if part).strip()
+    return (cleaned + "\n" if cleaned else ""), removed
+
+
+def plan_detach(project_path: Path) -> list[DetachAction]:
+    """Find only repository artifacts that dotai can prove it generated."""
+    project_path = project_path.resolve()
+    actions: list[DetachAction] = []
+
+    for filename in TEAM_INSTRUCTION_FILES.values():
+        path = project_path / filename
+        if path.is_symlink() or not path.is_file():
+            continue
+        cleaned, removed = _remove_dotai_sections(path.read_text())
+        if not removed:
+            continue
+        actions.append(DetachAction(
+            path=path,
+            action="update" if cleaned else "delete",
+            kind="agent-file",
+            new_content=cleaned or None,
+        ))
+
+    skills_dir = project_path / ".claude" / "skills"
+    if skills_dir.is_dir():
+        for skill_dir in sorted(skills_dir.iterdir()):
+            skill_file = skill_dir / "SKILL.md"
+            if (
+                skill_dir.is_symlink()
+                or skill_file.is_symlink()
+                or not skill_dir.is_dir()
+                or not skill_file.is_file()
+            ):
+                continue
+            if "Auto-generated by dotai" in skill_file.read_text():
+                actions.append(DetachAction(
+                    path=skill_dir,
+                    action="delete",
+                    kind="claude-skill",
+                ))
+    return actions
+
+
+def apply_detach(actions: list[DetachAction], backup_root: Path) -> tuple[list[str], Path]:
+    """Back up and apply a previously reviewed detach plan."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_dir = backup_root / f"detach-{timestamp}"
+    backup_dir.mkdir(parents=True, exist_ok=False)
+
+    manifest: list[dict[str, str]] = []
+    prepared: list[tuple[DetachAction, Path]] = []
+    for index, action in enumerate(actions):
+        backup_path = backup_dir / f"{index:03d}-{action.path.name}"
+        if action.path.is_dir():
+            shutil.copytree(action.path, backup_path)
+        else:
+            shutil.copy2(action.path, backup_path)
+        prepared.append((action, backup_path))
+        manifest.append({
+            "path": str(action.path),
+            "action": action.action,
+            "kind": action.kind,
+            "backup": str(backup_path),
+        })
+
+    # Mutate only after every source has been backed up successfully.
+    changed: list[str] = []
+    for action, _ in prepared:
+        if action.action == "update":
+            action.path.write_text(action.new_content or "")
+        elif action.path.is_dir():
+            shutil.rmtree(action.path)
+        else:
+            action.path.unlink()
+        changed.append(str(action.path))
+
+    (backup_dir / "manifest.json").write_text(
+        json.dumps({"changes": manifest}, indent=2) + "\n"
+    )
+    return changed, backup_dir
+
+
+def _local_agent_context(agent: str, primer: str, team_root: Path) -> str:
+    """Compose team-owned guidance ahead of subordinate personal context."""
+    instruction_file = TEAM_INSTRUCTION_FILES[agent]
+    source = team_root / instruction_file
+    team_text = _without_dotai_section(source.read_text()) if source.exists() else ""
+    lines = [
+        "# dotai Local Context",
+        "",
+        "This context is stored outside the repository and does not modify team files.",
+        "Repository and organization instructions are authoritative. Personal dotai rules and",
+        "preferences are supplemental: ignore any personal instruction that conflicts with team",
+        "guidance, and ask the user when the conflict cannot be resolved safely.",
+        "",
+    ]
+    if team_text:
+        lines.extend([
+            f"## Team Instructions ({instruction_file}) — Authoritative",
+            "",
+            team_text,
+            "",
+        ])
+    lines.extend(["## Personal dotai Context — Supplemental", "", primer, ""])
+    return "\n".join(lines)
 
 
 def generate_primer(config: GlobalConfig, project_name: str | None = None,
@@ -64,20 +271,24 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
     project_rules = rules
 
     # Freeform rules.md (global + project) — was previously only referenced, never inlined
-    freeform_sections: list[tuple[str, str]] = []
+    freeform_sections: list[tuple[str, str, Path]] = []
     global_rules_md = load_rules_md(ai_dir)
     if global_rules_md:
-        freeform_sections.append(("Global (rules.md)", global_rules_md))
+        freeform_sections.append(("Global (rules.md)", global_rules_md, ai_dir / "rules.md"))
     if project_path:
         local_md = load_rules_md(project_path / ".ai")
         if local_md:
-            freeform_sections.append(("Project (.ai/rules.md)", local_md))
+            freeform_sections.append((
+                "Project (.ai/rules.md)", local_md, project_path / ".ai" / "rules.md"
+            ))
     elif project_name:
         proj = config.get_project(project_name)
         if proj:
             local_md = load_rules_md(proj.full_ai_path)
             if local_md:
-                freeform_sections.append(("Project (.ai/rules.md)", local_md))
+                freeform_sections.append((
+                    "Project (.ai/rules.md)", local_md, proj.full_ai_path / "rules.md"
+                ))
 
     lines = [
         "# AI Knowledge Base (~/.ai/)",
@@ -99,6 +310,10 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         "",
         "Project-specific overrides live in `<project>/.ai/` with the same structure.",
         "",
+        "**Team boundary:** repository and organization instructions outside dotai are authoritative.",
+        "Treat personal dotai rules and preferences as supplemental. If they conflict with team guidance,",
+        "follow the team guidance and ask the user when the conflict is ambiguous.",
+        "",
         "**Precedence:** hard rules > freeform rules.md > active preference packs > model default.",
         "Preference packs are soft taste (stack, structure, micro-style). Never override security/architecture rules.",
         "",
@@ -108,13 +323,19 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
     if freeform_sections:
         lines.append("## Freeform Conventions (rules.md)")
         lines.append("")
-        lines.append("Follow these project/global notes in addition to structured rules.")
+        if compact and not full:
+            lines.append("Load these notes on demand when their scope is relevant.")
+        else:
+            lines.append("Follow these project/global notes in addition to structured rules.")
         lines.append("")
-        for label, text in freeform_sections:
-            lines.append(f"### {label}")
-            lines.append("")
-            lines.append(text)
-            lines.append("")
+        for label, body, source_path in freeform_sections:
+            if compact and not full:
+                lines.append(f"- **{label}** — `{source_path}`")
+            else:
+                lines.append(f"### {label}")
+                lines.append("")
+                lines.append(body)
+                lines.append("")
         lines.append("")
 
     # Structured rules — always high priority
@@ -125,8 +346,7 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
             # Summary table with file pointers — agent reads full rule on demand
             for rule in project_rules:
                 globs = f" (applies to: `{', '.join(rule.globs)}`)" if rule.globs else ""
-                source = f" — `{rule.file_path}`" if rule.file_path else ""
-                lines.append(f"- **{rule.name}**: {rule.description}{globs}{source}")
+                lines.append(f"- **{rule.name}**: {rule.description}{globs}")
             lines.append("")
             lines.append("Read each rule file fully before acting in matching paths.")
             lines.append("")
@@ -151,7 +371,11 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         lines.append("")
         for role in project_roles:
             scope_tag = f" [{role.scope}]" if role.scope != "global" else ""
-            path_hint = f" — `{role.file_path}`" if role.file_path and (compact or not full) else ""
+            path_hint = (
+                f" — `{role.file_path}`"
+                if role.file_path and compact and not full
+                else ""
+            )
             lines.append(f"- **{role.name}**{scope_tag}: {role.description}{path_hint}")
         lines.append("")
 
@@ -192,20 +416,22 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 trigger = f" `{skill.trigger}`" if skill.trigger else ""
                 role_ref = f" (role: {skill.role})" if skill.role else ""
                 ctx = f" [context: {', '.join(skill.context)}]" if skill.context else ""
-                lines.append(f"- **{skill.name}**{trigger}{role_ref}{ctx}: {skill.description[:80]}")
+                detail = "" if compact and not full else f": {skill.description[:80]}"
+                lines.append(f"- **{skill.name}**{trigger}{role_ref}{ctx}{detail}")
             lines.append("")
 
         if uncategorized:
             for skill in uncategorized:
                 trigger = f" `{skill.trigger}`" if skill.trigger else ""
                 role_ref = f" (role: {skill.role})" if skill.role else ""
-                lines.append(f"- **{skill.name}**{trigger}{role_ref}: {skill.description[:80]}")
+                detail = "" if compact and not full else f": {skill.description[:80]}"
+                lines.append(f"- **{skill.name}**{trigger}{role_ref}{detail}")
             lines.append("")
 
         lines.append(
-            "Skills are available as slash commands after `dotai sync` (e.g. `/run_review`). "
-            "Load a full skill definition with `dotai prompt <skill>` or read the file under "
-            "`~/.ai/skills/`. Folder-based skills may include helper scripts in `scripts/`."
+            "Load a full skill only when selected with `dotai context --path . --skill <id>` "
+            "or `dotai prompt <skill>`. Slash commands require an agent adapter or an explicit "
+            "shared sync. Folder skills may include helper scripts in `scripts/`."
         )
         lines.append("")
 
@@ -222,29 +448,33 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
     lines.extend([
         "## How to Use",
         "",
-        "1. **Start of session**: Follow **Active Rules** (hard), then freeform `rules.md`, then preference packs (soft)",
-        "2. **Before a task**: Check if a relevant skill exists; load it via slash command or `dotai prompt`",
+        "1. **Start of session**: Keep universal rule summaries and the team-authority boundary active",
+        "2. **Before a task**: Run `dotai context --path . --files <paths>` and load a skill only when selected",
         "3. **Capture corrections**: Use `/run_learn` or `dotai learn` so mistakes become permanent rules",
         "4. **Borrow style**: Preference packs (`dotai prefs use`) are soft taste — never override hard rules",
         "5. **When unsure**: Structured rules > freeform notes > preference packs; project overrides global",
         "",
-        "## Composing Skills with Roles",
-        "",
-        "When the user writes `/<skill> as <role>`, adopt that role's full persona",
-        "before executing the skill's steps. The role shapes *how* you think;",
-        "the skill defines *what* you do.",
-        "",
-        "Examples:",
-        "- `/run_review as qa` — run the Code Review skill while thinking like a QA Engineer",
-        "- `/run_review as paranoid-reviewer` — review code as a paranoid staff engineer focused on security",
-        "- `/run_techdebt as debugger` — hunt tech debt with a debugger's systematic mindset",
-        "- `/run_review` (no role) — run the skill with its default role, or no persona if none is set",
-        "",
-        "To compose: find the matching role from **Available Roles** above,",
-        "adopt its persona and principles, then execute the skill's steps.",
-        "The role's anti-patterns become things to watch for during execution.",
-        "",
     ])
+
+    if not compact or full:
+        lines.extend([
+            "## Composing Skills with Roles",
+            "",
+            "When the user writes `/<skill> as <role>`, adopt that role's full persona",
+            "before executing the skill's steps. The role shapes *how* you think;",
+            "the skill defines *what* you do.",
+            "",
+            "Examples:",
+            "- `/run_review as qa` — run the Code Review skill while thinking like a QA Engineer",
+            "- `/run_review as paranoid-reviewer` — review code as a paranoid staff engineer focused on security",
+            "- `/run_techdebt as debugger` — hunt tech debt with a debugger's systematic mindset",
+            "- `/run_review` (no role) — run the skill with its default role, or no persona if none is set",
+            "",
+            "To compose: find the matching role from **Available Roles** above,",
+            "adopt its persona and principles, then execute the skill's steps.",
+            "The role's anti-patterns become things to watch for during execution.",
+            "",
+        ])
 
     return "\n".join(lines)
 
@@ -279,7 +509,8 @@ def generate_cursorrules(config: GlobalConfig, project_name: str | None = None,
                          extra_prefs: list[str] | None = None) -> str:
     """Generate .cursorrules content."""
     return generate_primer(
-        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        config, project_name, project_path, compact=not full,
+        full=full, extra_prefs=extra_prefs
     )
 
 
@@ -294,7 +525,8 @@ def generate_gemini_md(config: GlobalConfig, project_name: str | None = None,
     for global instructions.
     """
     primer = generate_primer(
-        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        config, project_name, project_path, compact=not full,
+        full=full, extra_prefs=extra_prefs
     )
     return f"""# Project Context
 
@@ -311,7 +543,8 @@ def generate_agents_md(config: GlobalConfig, project_name: str | None = None,
                        extra_prefs: list[str] | None = None) -> str:
     """Generate AGENTS.md (generic agent bootstrap)."""
     primer = generate_primer(
-        config, project_name, project_path, full=full, extra_prefs=extra_prefs
+        config, project_name, project_path, compact=not full,
+        full=full, extra_prefs=extra_prefs
     )
     return f"""# Agent Instructions
 
@@ -532,4 +765,41 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
             agents_path.write_text(DOTAI_MARKER_START + "\n" + generated.strip() + "\n" + DOTAI_MARKER_END + "\n")
         written.append(str(agents_path))
 
+    return written
+
+
+def sync_local_context(plan: SyncPlan, config: GlobalConfig,
+                       project_name: str | None = None, full: bool = False,
+                       extra_prefs: list[str] | None = None) -> list[str]:
+    """Generate context outside the repository, preserving team-owned files."""
+    if plan.mode != "local":
+        raise ValueError("sync_local_context requires a local sync plan")
+
+    plan.target_path.mkdir(parents=True, exist_ok=True)
+    primer = generate_primer(
+        config, project_name, plan.project_path,
+        compact=not full, full=full, extra_prefs=extra_prefs,
+    )
+    written: list[str] = []
+    generated: dict[str, str] = {}
+    team_root = plan.git_root or plan.project_path
+    for agent in plan.agents:
+        if agent not in TEAM_INSTRUCTION_FILES:
+            raise ValueError(f"Unknown agent: {agent}")
+        filename = TEAM_INSTRUCTION_FILES[agent]
+        target = plan.target_path / filename
+        target.write_text(_local_agent_context(agent, primer, team_root))
+        written.append(str(target))
+        generated[agent] = filename
+
+    manifest = plan.target_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "mode": plan.mode,
+        "project_path": str(plan.project_path),
+        "git_root": str(plan.git_root) if plan.git_root else None,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "files": generated,
+        "precedence": ["team", "personal-dotai", "model-default"],
+    }, indent=2) + "\n")
+    written.append(str(manifest))
     return written
