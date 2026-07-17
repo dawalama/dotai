@@ -10,11 +10,11 @@ from . import app, console
 
 @app.command()
 def watch(
-    path: str = typer.Argument(".", help="Project path to sync into"),
+    path: str = typer.Argument(".", help="Project path to prepare context for"),
     agents: Optional[str] = typer.Option(None, help="Comma-separated: claude,cursor,gemini,generic"),
     shared: bool = typer.Option(False, "--shared", help="Explicitly update repository agent files"),
 ):
-    """Watch ~/.ai/ for changes and auto-resync agent config files.
+    """Watch ~/.ai/ for changes and refresh resolved context.
 
     Runs in the foreground. Press Ctrl+C to stop.
     """

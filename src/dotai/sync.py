@@ -684,9 +684,8 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
         project_name: Project name for scoped context
         agents: Which agents to generate for. Default: all.
                 Options: "claude", "cursor", "gemini", "generic"
-        full: When True, inline full role personas and skill definitions
-              (larger context). Default is catalog-style for skills/roles
-              with full structured rule bodies.
+        full: When True, inline complete rules, roles, skills, and preferences.
+              The default is a compact bootstrap with summaries and pointers.
         extra_prefs: Session overlay preference pack ids.
 
     Returns:

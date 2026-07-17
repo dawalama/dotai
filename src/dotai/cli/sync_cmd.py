@@ -12,12 +12,12 @@ from . import app, console
 
 @app.command()
 def sync(
-    path: str = typer.Argument(".", help="Project path to sync into"),
+    path: str = typer.Argument(".", help="Project path to prepare context for"),
     agents: Optional[str] = typer.Option(None, help="Comma-separated: claude,cursor,gemini,generic"),
     full: bool = typer.Option(
         False,
         "--full",
-        help="Inline full role personas and skill definitions (larger context; default is catalog + full rules)",
+        help="Inline complete rules, roles, skills, and preferences (larger context)",
     ),
     with_prefs: Optional[str] = typer.Option(
         None,

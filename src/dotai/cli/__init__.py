@@ -144,7 +144,7 @@ def init(
         console.print(f"  {ai_dir}/skills/ ({len(list(skills_dir.glob('*.md')))} skills)")
         console.print(f"  {ai_dir}/preferences/")
         console.print(f"  {ai_dir}/tools/")
-        console.print(f"\n[dim]Next: cd into a project and run `dotai sync` to generate agent configs.[/dim]")
+        console.print(f"\n[dim]Next: cd into a project and run `dotai sync` to prepare safe local context.[/dim]")
         console.print(f"[dim]Have an existing CLAUDE.md / AGENTS.md?  `dotai import-agent CLAUDE.md --dry-run`[/dim]")
         console.print(f"[dim]Capture a correction:  `dotai learn \"title\" -i \"issue\" -c \"correction\" --dry-run`[/dim]")
         console.print(f"[dim]Borrow style:  `dotai prefs new \"CLI\" --domain cli` then `dotai prefs use cli`[/dim]")
