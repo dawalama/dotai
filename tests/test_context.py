@@ -165,6 +165,10 @@ def test_receipt_records_metadata_without_bodies(
     serialized = path.read_text()
     assert "Remove all `console.log` statements" not in serialized
     assert "\"body\"" not in serialized
+    history_files = list((ai_dir.parent / "receipts" / "history" / "claude").glob("*.json"))
+    assert len(history_files) == 1
+    assert "Remove all `console.log` statements" not in history_files[0].read_text()
+    assert "\"body\"" not in history_files[0].read_text()
 
 
 def test_receipt_rejects_unsafe_agent_id(ai_dir, config):

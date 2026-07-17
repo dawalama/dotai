@@ -1,6 +1,5 @@
 """CLI commands for rules."""
 
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -390,47 +389,51 @@ def toggle(
 
 @app.command()
 def learn(
-    title: str = typer.Argument(..., help="Short title for the rule or learning"),
+    title: str = typer.Argument(..., help="Short title for the rule"),
     from_file: Optional[str] = typer.Option(None, "--from-file", "-f", help="Import rule from a file"),
+    directive: Optional[str] = typer.Option(
+        None,
+        "--directive",
+        help="Engineering standard, preference, or guardrail to follow",
+    ),
     issue: Optional[str] = typer.Option(None, "--issue", "-i", help="What went wrong (inline mode)"),
     correction: Optional[str] = typer.Option(None, "--correction", "-c", help="What to do instead (inline mode)"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="One-line description"),
     globs: Optional[str] = typer.Option(None, "--globs", "-g", help="File patterns this rule applies to (e.g. '*.tsx,*.ts')"),
     tags: Optional[str] = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Project name (writes to project rules/)"),
-    append_md: bool = typer.Option(
-        False,
-        "--append-md",
-        help="Append a freeform journal entry to rules.md instead of creating a structured rule file",
-    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the rule that would be written without saving"),
     force: bool = typer.Option(False, "--force", help="Overwrite if a similar rule already exists"),
     do_sync: bool = typer.Option(False, "--sync", help="Run `dotai sync` in the current directory after saving"),
 ):
-    """Capture a convention as a structured rule (default) or freeform journal entry.
+    """Teach agents engineering judgment as a structured rule.
 
     Structured rule (default — preferred):
+      dotai learn "no-useEffect" --directive "Never call useEffect directly" -g "*.tsx,*.ts"
       dotai learn "auth-header" -i "Forgot Bearer prefix" -c "Always prepend Bearer to tokens"
       dotai learn "no-useEffect" -f react-rule.md -g "*.tsx,*.ts"
-
-    Freeform journal (legacy):
-      dotai learn "title" -i "..." -c "..." --append-md
 
     Preview without writing:
       dotai learn "auth-header" -i "..." -c "..." --dry-run
     """
     from ..store import load_config
     from ..rules import (
+        build_rule_from_directive,
         build_rule_from_file,
         build_rule_from_learning,
+        create_rule_from_directive,
         create_rule_from_file,
         create_rule_from_learning,
         find_duplicate_rules,
         parse_rule_file,
     )
 
-    if not from_file and not (issue and correction):
-        console.print("[red]Provide --from-file, or --issue and --correction[/red]")
+    capture_modes = int(bool(from_file)) + int(bool(directive)) + int(bool(issue or correction))
+    if capture_modes != 1 or bool(issue) != bool(correction):
+        console.print(
+            "[red]Provide exactly one of --from-file, --directive, "
+            "or both --issue and --correction[/red]"
+        )
         raise typer.Exit(1)
 
     config = load_config()
@@ -444,37 +447,13 @@ def learn(
             console.print(f"[red]Project '{project}' not found[/red]")
             raise typer.Exit(1)
         rules_dir = proj.rules_path
-        rules_md_path = proj.full_ai_path / "rules.md"
         scope_label = project
     else:
         rules_dir = config.global_rules_path
-        rules_md_path = config.global_ai_dir / "rules.md"
         scope_label = "global"
 
-    # --- Freeform journal path (opt-in) ---
-    if append_md:
-        if from_file:
-            console.print("[red]--append-md cannot be combined with --from-file[/red]")
-            raise typer.Exit(1)
-        entry = f"\n### {datetime.now().strftime('%Y-%m-%d')}: {title}\n"
-        entry += f"**Issue:** {issue}\n"
-        entry += f"**Correction:** {correction}\n"
-        if dry_run:
-            console.print(f"[dim]Would append to {rules_md_path}:[/dim]\n")
-            console.print(entry)
-            return
-        rules_md_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(rules_md_path, "a") as f:
-            f.write(entry)
-        console.print(f"[green]Recorded freeform learning:[/green] {title}")
-        console.print(f"  [dim]{rules_md_path}[/dim]")
-        console.print("[dim]Tip: omit --append-md to create a structured rule agents enforce better.[/dim]")
-        if do_sync:
-            _run_sync_here()
-        return
-
     # --- Structured rule path (default) ---
-    desc_for_dedup = description or (correction or "")
+    desc_for_dedup = description or directive or correction or ""
     duplicates = find_duplicate_rules(config, title, desc_for_dedup, project_name=project)
     if duplicates and not force:
         console.print("[yellow]Similar rule(s) already exist:[/yellow]")
@@ -506,6 +485,27 @@ def learn(
             source_path=source,
             name=title,
             dest_dir=rules_dir,
+            description=description,
+            globs=glob_list,
+            tags=tag_list,
+        )
+    elif directive:
+        dest, content = build_rule_from_directive(
+            name=title,
+            dest_dir=rules_dir,
+            directive=directive,
+            description=description,
+            globs=glob_list,
+            tags=tag_list,
+        )
+        if dry_run:
+            console.print(f"[dim]Would write {dest} ({scope_label}):[/dim]\n")
+            console.print(content)
+            return
+        dest = create_rule_from_directive(
+            name=title,
+            dest_dir=rules_dir,
+            directive=directive,
             description=description,
             globs=glob_list,
             tags=tag_list,
@@ -552,15 +552,17 @@ def learn(
 
 
 def _run_sync_here() -> None:
-    """Sync agent files into the current working directory."""
-    from ..store import load_config
-    from ..sync import sync_project
+    """Refresh repository-safe local context for the current directory."""
+    from ..store import get_config_dir, load_config
+    from ..sync import plan_sync, sync_local_context
 
     config = load_config()
     project_path = Path.cwd()
     project_config = next((p for p in config.projects if p.path == project_path), None)
     project_name = project_config.name if project_config else None
-    written = sync_project(project_path, config, project_name)
+    written = sync_local_context(
+        plan_sync(project_path, get_config_dir()), config, project_name
+    )
     for f in written:
         console.print(f"  [green]Synced[/green] {f}")
 

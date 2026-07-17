@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from .models import GlobalConfig, KnowledgeNode, NodeType, Role
+from .models import GlobalConfig, Role
 from .utils import generate_id as generate_role_id
 
 
@@ -127,30 +127,6 @@ def load_all_roles(config: GlobalConfig) -> list[Role]:
         roles.extend(load_roles_from_dir(project.roles_path, project.name))
 
     return roles
-
-
-def build_roles_node(roles: list[Role], category_name: str, category_id: str) -> KnowledgeNode:
-    """Build a knowledge node for a collection of roles."""
-    children = []
-
-    for role in roles:
-        children.append(KnowledgeNode(
-            id=f"role_{role.id}",
-            name=role.name,
-            node_type=NodeType.ROLE,
-            summary=role.description,
-            file_path=role.file_path,
-            tags=role.tags,
-            metadata={"scope": role.scope},
-        ))
-
-    return KnowledgeNode(
-        id=category_id,
-        name=category_name,
-        node_type=NodeType.CATEGORY,
-        summary=f"{len(roles)} roles available",
-        children=children,
-    )
 
 
 def create_role_template(name: str) -> str:

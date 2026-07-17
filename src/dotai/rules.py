@@ -10,7 +10,7 @@ that agents can directly consume and enforce.
 import re
 from pathlib import Path
 
-from .models import GlobalConfig, KnowledgeNode, NodeType, Rule
+from .models import GlobalConfig, Rule
 from .utils import generate_id as generate_rule_id
 
 
@@ -189,30 +189,6 @@ def toggle_rule_for_project(config: GlobalConfig, project_name: str, rule_id: st
     return False
 
 
-def build_rules_node(rules: list[Rule], category_name: str, category_id: str) -> KnowledgeNode:
-    """Build a knowledge node for a collection of rules."""
-    children = []
-
-    for rule in rules:
-        children.append(KnowledgeNode(
-            id=f"rule_{rule.id}",
-            name=rule.name,
-            node_type=NodeType.RULE,
-            summary=rule.description,
-            file_path=rule.file_path,
-            tags=rule.tags,
-            metadata={"globs": rule.globs, "scope": rule.scope},
-        ))
-
-    return KnowledgeNode(
-        id=category_id,
-        name=category_name,
-        node_type=NodeType.CATEGORY,
-        summary=f"{len(rules)} rules available",
-        children=children,
-    )
-
-
 def format_rule_markdown(
     name: str,
     description: str,
@@ -274,6 +250,65 @@ def build_rule_from_learning(
         tags=auto_tags or None,
     )
     return dest_path, content
+
+
+def build_rule_from_directive(
+    name: str,
+    dest_dir: Path,
+    directive: str,
+    description: str | None = None,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> tuple[Path, str]:
+    """Build a structured rule from a proactive engineering directive.
+
+    Unlike a learning, a directive does not require a prior mistake. This is the
+    primary capture path for standards, architectural choices, and developer taste.
+    Does not write to disk.
+    """
+    rule_id = generate_rule_id(name)
+    dest_path = dest_dir / f"{rule_id}.md"
+    clean_directive = directive.strip()
+    desc = (description or clean_directive).strip()
+    if len(desc) > 120:
+        desc = desc[:117] + "..."
+
+    body = (
+        f"### Rule: `{name}`\n\n"
+        f"_{desc}_\n\n"
+        f"**Directive:** {clean_directive}\n"
+    )
+    auto_tags = tags if tags is not None else _detect_tags(clean_directive)
+    content = format_rule_markdown(
+        name=name,
+        description=desc,
+        body=body,
+        globs=globs,
+        tags=auto_tags or None,
+    )
+    return dest_path, content
+
+
+def create_rule_from_directive(
+    name: str,
+    dest_dir: Path,
+    directive: str,
+    description: str | None = None,
+    globs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> Path:
+    """Create a structured rule from a proactive engineering directive."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path, content = build_rule_from_directive(
+        name=name,
+        dest_dir=dest_dir,
+        directive=directive,
+        description=description,
+        globs=globs,
+        tags=tags,
+    )
+    dest_path.write_text(content)
+    return dest_path
 
 
 def create_rule_from_learning(

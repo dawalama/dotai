@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,7 +119,8 @@ class ResolvedContext:
         lines = [
             "# Resolved dotai Context",
             "",
-            "Repository and organization instructions are authoritative. This personal",
+            "This is developer-controlled engineering judgment selected for the current task.",
+            "Repository and organization instructions are authoritative. Personal dotai",
             "context is supplemental and must be ignored where it conflicts with team guidance.",
             "",
             "## Universal Rule Index",
@@ -199,6 +201,23 @@ def save_resolution_receipt(
     temporary = receipts_dir / f".{agent_id}.json.tmp"
     temporary.write_text(json.dumps(payload, indent=2) + "\n")
     temporary.replace(path)
+
+    history_dir = receipts_dir / "history" / agent_id
+    history_dir.mkdir(parents=True, exist_ok=True)
+    history_path = history_dir / f"{uuid.uuid4().hex}.json"
+    history_temporary = history_dir / f".{history_path.name}.tmp"
+    history_temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    history_temporary.replace(history_path)
+    history_files = sorted(
+        (
+            item for item in history_dir.glob("*.json")
+            if item.is_file() and not item.is_symlink()
+        ),
+        key=lambda item: item.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for stale in history_files[500:]:
+        stale.unlink()
     return path
 
 

@@ -1,23 +1,9 @@
 """Core data models for the ~/.ai/ knowledge system."""
 
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-
-
-class NodeType(str, Enum):
-    ROOT = "root"
-    CATEGORY = "category"
-    PROJECT = "project"
-    DOCUMENT = "document"
-    SECTION = "section"
-    ENTRY = "entry"
-    SKILL = "skill"
-    TOOL = "tool"
-    ROLE = "role"
-    RULE = "rule"
 
 
 class SkillCategory(str, Enum):
@@ -268,105 +254,6 @@ class Skill(BaseModel):
                 lines.append(f"- **{key}:** {value}")
 
         return "\n".join(lines)
-
-
-class KnowledgeNode(BaseModel):
-    """A node in the hierarchical knowledge tree."""
-
-    id: str = Field(..., description="Unique identifier for this node")
-    name: str = Field(..., description="Human-readable name")
-    node_type: NodeType = Field(..., description="Type of this node")
-    summary: str | None = Field(None, description="Brief description for LLM reasoning")
-
-    file_path: Path | None = Field(None, description="Path to the source file")
-    start_line: int | None = Field(None, description="Start line in file (for sections)")
-    end_line: int | None = Field(None, description="End line in file (for sections)")
-
-    tags: list[str] = Field(default_factory=list, description="Semantic tags for filtering")
-    metadata: dict = Field(default_factory=dict, description="Arbitrary metadata")
-
-    children: list["KnowledgeNode"] = Field(default_factory=list)
-
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
-
-    def find_by_id(self, node_id: str) -> "KnowledgeNode | None":
-        if self.id == node_id:
-            return self
-        for child in self.children:
-            result = child.find_by_id(node_id)
-            if result:
-                return result
-        return None
-
-    def find_by_tag(self, tag: str) -> list["KnowledgeNode"]:
-        results = []
-        if tag in self.tags:
-            results.append(self)
-        for child in self.children:
-            results.extend(child.find_by_tag(tag))
-        return results
-
-    def find_by_type(self, node_type: NodeType) -> list["KnowledgeNode"]:
-        results = []
-        if self.node_type == node_type:
-            results.append(self)
-        for child in self.children:
-            results.extend(child.find_by_type(node_type))
-        return results
-
-    def find_by_text(self, query: str) -> list["KnowledgeNode"]:
-        """Search nodes by keyword across name, summary, tags, and metadata."""
-        results = []
-        q = query.lower()
-        searchable = " ".join([
-            self.name.lower(),
-            (self.summary or "").lower(),
-            " ".join(self.tags).lower(),
-            " ".join(str(v) for v in self.metadata.values()).lower(),
-        ])
-        if q in searchable:
-            results.append(self)
-        for child in self.children:
-            results.extend(child.find_by_text(query))
-        return results
-
-    def to_toc(self, indent: int = 0) -> str:
-        """Generate a table-of-contents style representation."""
-        prefix = "  " * indent
-        type_icon = {
-            NodeType.ROOT: "📚",
-            NodeType.CATEGORY: "📁",
-            NodeType.PROJECT: "🗂️",
-            NodeType.DOCUMENT: "📄",
-            NodeType.SECTION: "📑",
-            NodeType.ENTRY: "•",
-            NodeType.TOOL: "🔧",
-            NodeType.SKILL: "⚡",
-            NodeType.ROLE: "🎭",
-        }.get(self.node_type, "•")
-
-        lines = [f"{prefix}{type_icon} [{self.id}] {self.name}"]
-        if self.summary:
-            lines.append(f"{prefix}   └─ {self.summary}")
-
-        for child in self.children:
-            lines.append(child.to_toc(indent + 1))
-
-        return "\n".join(lines)
-
-    def to_compact_json(self) -> dict:
-        """Compact JSON for LLM context - omits empty fields."""
-        data = {"id": self.id, "name": self.name, "type": self.node_type.value}
-        if self.summary:
-            data["summary"] = self.summary
-        if self.file_path:
-            data["file"] = str(self.file_path)
-        if self.tags:
-            data["tags"] = self.tags
-        if self.children:
-            data["children"] = [c.to_compact_json() for c in self.children]
-        return data
 
 
 class ProjectConfig(BaseModel):

@@ -9,8 +9,10 @@ from dotai.import_agent import (
     strip_dotai_managed,
 )
 from dotai.rules import (
+    build_rule_from_directive,
     build_rule_from_learning,
     check_rule_quality,
+    create_rule_from_directive,
     create_rule_from_learning,
     find_duplicate_rules,
     load_rules_md,
@@ -126,6 +128,30 @@ class TestPlanImport:
 
 
 class TestLearnStructured:
+    def test_create_rule_from_directive(self, ai_dir):
+        path = create_rule_from_directive(
+            name="no-useeffect",
+            dest_dir=ai_dir / "rules",
+            directive="Never call useEffect directly; prefer declarative alternatives.",
+            globs=["*.tsx", "*.ts"],
+            tags=["react", "taste"],
+        )
+        rule = parse_rule_file(path)
+        assert rule is not None
+        assert rule.id == "no-useeffect"
+        assert "**Directive:** Never call useEffect directly" in rule.body
+        assert "**Issue:**" not in rule.body
+        assert rule.globs == ["*.tsx", "*.ts"]
+
+    def test_build_directive_does_not_write(self, ai_dir):
+        dest, content = build_rule_from_directive(
+            name="small-modules",
+            dest_dir=ai_dir / "rules",
+            directive="Prefer small, cohesive modules.",
+        )
+        assert "**Directive:** Prefer small, cohesive modules." in content
+        assert not dest.exists()
+
     def test_create_rule_from_learning(self, ai_dir):
         path = create_rule_from_learning(
             name="auth-header",

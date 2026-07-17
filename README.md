@@ -1,8 +1,8 @@
 # dotai
 
-**Your coding agents should remember what you taught them.**
+**Portable engineering judgment for coding agents.**
 
-dotai gives Claude, Cursor, Gemini, Codex, and other coding agents one personal memory for how you build software. Keep your rules, workflows, and engineering taste in `~/.ai/`; resolve only the context each task needs without taking ownership of team files.
+dotai teaches Claude, Cursor, Gemini, Codex, and other coding agents how you build software. Keep your standards, workflows, guardrails, and engineering taste in `~/.ai/`; dotai applies only the judgment each task needs without taking ownership of team files.
 
 ```text
 ~/.ai/ ── dotai context ── relevant rules + skill + role + preferences
@@ -10,38 +10,41 @@ dotai gives Claude, Cursor, Gemini, Codex, and other coding agents one personal 
    └──── dotai sync ────── local context cache (outside Git repositories)
 ```
 
-No server. No account. No proprietary memory layer. Just portable Markdown that you own.
+Teach it once. Apply it when relevant. Know what influenced the agent. No server, account, or proprietary memory layer—just portable Markdown that you own.
 
 ## The short version
 
 | You want to… | Use |
 |---|---|
-| Teach agents a permanent constraint | `dotai learn` |
+| Teach agents a standard, taste, or guardrail | `dotai learn --directive` |
 | Use dotai automatically in Claude Code | `dotai agent setup claude --apply` |
 | See what Claude actually loaded | `dotai agent last claude` |
 | Resolve context manually or from automation | `dotai context` |
 | Prepare a safe per-repository cache | `dotai sync` |
-| Intentionally maintain shared loader files | `dotai sync --shared` |
 
 The default is personal and repository-safe. Team instructions stay authoritative.
 
-## Stop reteaching every agent
+## Make every agent work like yours
 
-You tell one agent “never call `useEffect` directly.” Next week, a different agent does exactly that. Your review checklist lives in one tool, your deployment workflow in another, and the correction you made yesterday disappears with the chat.
+You prefer derived state over synchronization effects. You reproduce bugs before fixing them. You never allow credentials in logs. These are different kinds of judgment, but they all shape how you build software—and they should not disappear when you change agents.
 
-dotai turns those corrections into durable, reusable context:
+dotai turns that judgment into durable, reusable instructions:
 
-- **Rules are hard constraints.** Capture coding standards and scope them by project or file pattern.
+- **Rules codify decisions.** Capture standards, architectural taste, safety boundaries, and compliance requirements; scope them by project or file pattern.
 - **Skills are repeatable workflows.** Plan, investigate, review, verify, and ship the same way every time.
 - **Roles change how the agent thinks.** Review as a security engineer; plan as a product manager.
 - **Preference packs carry your taste.** Share softer choices without weakening hard rules.
 - **Adapters fit normal workflows.** Configure an agent once, then ask naturally while dotai resolves context behind the scenes.
 
-The useful part is the feedback loop:
+Rules can be proactive or learned from a correction:
 
 ```text
-agent makes a mistake → capture the correction → resolve it on the next relevant task
+teach a standard ───────────────┐
+                               ├─→ approve → resolve when relevant → verify what loaded
+correct an agent → keep lesson ┘
 ```
+
+dotai is deliberately not an autonomous history of every conversation. It is the small, developer-approved part of memory important enough to be explicit, portable, scoped, and auditable.
 
 ## See it in action
 
@@ -49,11 +52,11 @@ agent makes a mistake → capture the correction → resolve it on the next rele
 # Set up your global knowledge base
 dotai init
 
-# Teach every agent a correction you never want to repeat
-dotai learn "no-print-debugging" \
-  --issue "Debug output was left in production code" \
-  --correction "Use structured logging and remove temporary debug output" \
-  --globs "*.py"
+# Teach every agent an engineering preference
+dotai learn "no-useeffect" \
+  --directive "Never call useEffect directly; prefer declarative alternatives" \
+  --globs "*.tsx,*.ts" \
+  --tags "react,taste"
 
 # Prepare that knowledge for the current project
 cd ~/my-project
@@ -115,9 +118,9 @@ cd ~/my-project
 dotai sync
 ```
 
-Inside a Git repository, `dotai sync` defaults to **local mode**. It writes personal context under `~/.config/dotai/contexts/` and leaves team-owned files such as `CLAUDE.md`, `AGENTS.md`, and `.claude/skills/` untouched. Existing repository instructions are copied into the local context as the authoritative layer; personal dotai rules and preferences are explicitly supplemental.
+`dotai sync` always writes personal context under `~/.config/dotai/contexts/` and leaves team-owned files such as `CLAUDE.md`, `AGENTS.md`, and `.claude/skills/` untouched. Existing repository instructions are copied into the local context as the authoritative layer; personal dotai rules and preferences are explicitly supplemental.
 
-Local context storage does not, by itself, make an agent load the context. Until an agent adapter is configured, use `dotai primer --path .` to print context for pasting or piping into your agent. Use `dotai sync --shared` only when your team has intentionally chosen to maintain dotai sections in repository files.
+Local context storage does not, by itself, make an agent load the context. Until an agent adapter is configured, use `dotai primer --path .` to print a compact bootstrap for pasting or piping into your agent.
 
 dotai uses progressive disclosure to keep prompts small. Synced context contains rule summaries and role/skill catalogs. Expand only what a task needs:
 
@@ -181,6 +184,29 @@ memory under `~/.config/dotai/backups/agents/claude/`.
 adapter invokes the resolver. It reports selection metadata and reasons, but
 never stores source contents, expanded prompts, credentials, or telemetry.
 
+### Understanding what dotai delivered
+
+`dotai insights` aggregates local resolution receipts so you can see whether
+your engineering judgment is actually being selected:
+
+```bash
+dotai insights
+dotai insights --agent claude
+dotai insights --project my-app
+dotai insights --json
+```
+
+The report shows complete versus provisional resolutions, selection counts,
+last-selected timestamps, universal rule-summary exposure, and enabled items
+that have never been selected in the current window. Selection proves delivery,
+not compliance: dotai cannot claim that an agent followed an instruction merely
+because it received it.
+
+History contains metadata only and is stored under
+`~/.config/dotai/receipts/history/`. It never includes expanded bodies, prompts,
+source contents, or credentials. History is bounded to the latest 500 receipts
+per agent and never leaves the machine.
+
 If no receipt appears, refresh the adapter and start a new Claude Code session:
 
 ```bash
@@ -193,23 +219,6 @@ Setup pins the dotai executable used to install the adapter, avoiding an older
 directory is unavailable, Claude still receives resolved context and dotai emits
 a warning instead of blocking the task.
 
-### Moving an existing repository to local mode
-
-If an older dotai version wrote generated context into repository files, use the
-one-off detach command. It previews by default:
-
-```bash
-dotai detach
-dotai detach --apply
-```
-
-Detach removes only complete `<!-- dotai:start -->` blocks and Claude skill
-directories whose `SKILL.md` contains dotai's generated marker. Loader files
-containing team content are preserved and updated in place; files containing
-only generated dotai content are removed. Before applying changes, dotai copies
-every affected artifact to `~/.config/dotai/backups/detach/`. Detach is not part
-of routine sync and does not need to be run again after migration.
-
 ## Usage
 
 ### Daily workflow
@@ -218,9 +227,6 @@ of routine sync and does not need to be run again after migration.
 # Start of day: refresh local context for the project you're working on
 cd ~/my-project
 dotai sync
-
-# Or leave it running — auto-resyncs when you edit ~/.ai/ files
-dotai watch
 
 # Print the context for an agent that does not yet have a dotai adapter
 dotai primer --path .
@@ -233,9 +239,7 @@ apply. Use `dotai agent last claude` whenever you want to verify delivery.
 
 ### Using skills in Claude Code
 
-Natural-language routing is recommended for the personal adapter. If your team
-explicitly chooses shared Claude configuration, `dotai sync --shared --agents
-claude` also installs native repository slash commands:
+Natural-language routing is recommended with the personal adapter:
 
 ```
 > /run_plan                            # Plan before coding
@@ -253,24 +257,25 @@ claude` also installs native repository slash commands:
 
 ### Using skills outside Claude Code
 
-Assemble a skill prompt and pipe it into any tool:
+Resolve a skill and its role through the same context engine used by adapters:
 
 ```bash
-# Copy a skill prompt to clipboard
-dotai prompt review --role paranoid-reviewer | pbcopy
-
-# Save to a file
-dotai prompt ship > /tmp/ship-prompt.md
+dotai context --path . --skill run_review --role paranoid-reviewer
 
 # List skills filtered by category
 dotai skills --category deployment
 ```
 
-### Recording what you learn
+### Teaching your engineering judgment
 
-`dotai learn` creates a **structured rule file** in `~/.ai/rules/` by default (not a freeform journal scrap).
+`dotai learn` creates a **structured rule file** in `~/.ai/rules/` by default. Use a directive for a standard you already hold; use an issue and correction when an agent interaction teaches you something new.
 
 ```bash
+# Proactively encode engineering taste or a guardrail
+dotai learn "no-useeffect" \
+  --directive "Never call useEffect directly; prefer declarative alternatives" \
+  --globs "*.tsx,*.ts"
+
 # Preview the rule without writing
 dotai learn "auth-header" \
   --issue "Forgot Bearer prefix on API token" \
@@ -286,9 +291,6 @@ dotai learn "auth-header" \
 # Import a detailed rule from a file
 dotai learn "no-useEffect" --from-file react-rules.md --globs "*.tsx,*.ts"
 
-# Freeform journal entry in rules.md (opt-in)
-dotai learn "note" -i "..." -c "..." --append-md
-
 # Or ask an adapted agent naturally
 > Capture what we learned as a rule.
 
@@ -299,7 +301,7 @@ dotai toggle no-useeffect --off --project legacy-app
 dotai rules --check
 ```
 
-The feedback loop: **agent makes a mistake → capture the correction → structured rule → dotai resolves it for the next matching task.**
+The loop: **teach or correct → review the structured rule → dotai resolves it for the next matching task → inspect what loaded.**
 
 ### Keeping rules healthy
 
@@ -376,10 +378,6 @@ dotai sync
 dotai prefs pull ./design-eng-taste.md --name design-eng --domain design
 dotai prefs pull https://github.com/org/taste-packs -n cli
 dotai prefs use design-eng
-
-# Session overlay without changing active list
-dotai sync --with-prefs design-eng,cli
-dotai primer --with-prefs design-eng
 
 # List / show / deactivate
 dotai prefs
@@ -532,7 +530,7 @@ All skill triggers use the `run_` prefix to avoid collisions with built-in agent
 | Scaffold | `/run_scaffold` | Generate boilerplate from patterns |
 | Verify | `/run_verify` | Run tests, types, lint, build |
 | Plan | `/run_plan` | Structured planning before coding |
-| Learn | `/run_learn` | Capture mistakes as permanent rules |
+| Learn | `/run_learn` | Capture engineering judgment as structured rules |
 
 ### Skill Format
 
@@ -623,8 +621,7 @@ Skills reference roles by ID — when a skill runs, the role's full persona is i
 
 ### Composing Skills with Roles
 
-Shared Claude slash commands can compose a skill with a role inline. In the
-personal adapter flow, ask for the perspective naturally or resolve it explicitly
+Ask for a perspective naturally through an adapter, or resolve it explicitly
 with `dotai context --skill <skill> --role <role>`.
 
 ```
@@ -637,12 +634,7 @@ with `dotai context --skill <skill> --role <role>`.
 /run_review                         # Uses the skill's default role, or none
 ```
 
-From the CLI:
-
-```bash
-dotai prompt review --role paranoid-reviewer | pbcopy
-dotai prompt review --role qa > /tmp/prompt.md
-```
+The resolver expands the role and skill together and records why each was selected.
 
 ## Rules
 
@@ -692,63 +684,36 @@ dotai toggle no-useeffect --off --project my-legacy-app
 dotai toggle no-useeffect --on
 ```
 
-Synced agent files contain a compact bootstrap by default: universal rule summaries plus preference, role, and skill catalogs. Use `dotai context` to expand relevant material on demand, or pass `dotai sync --full` for the legacy complete inline context.
+Synced local context contains a compact bootstrap: universal rule summaries plus preference, role, and skill catalogs. Use `dotai context` to expand relevant material on demand.
 
 ## Agent Sync
 
-`dotai sync` prepares tool-specific context with:
+`dotai sync` prepares repository-safe local context with:
 
 - **Universal structured rule summaries** (always visible)
 - **Pointers to freeform `rules.md` conventions**
 - **Role and skill catalogs** (names, triggers, categories — not full workflows)
-- **Claude shared mode**: compact pointers + native `.claude/skills/` slash commands
-
-Use `--full` only when you need every role persona and skill definition dumped inline (larger context).
-
-In a Git repository, local mode is the default and writes outside the worktree. Team instructions take precedence over personal dotai rules and preferences. dotai does not attempt unreliable keyword-based conflict resolution; the generated context tells the agent to ignore conflicting personal guidance and ask when a disagreement is ambiguous.
+Context is always written outside the worktree. Team instructions take precedence over personal dotai rules and preferences. dotai does not attempt unreliable keyword-based conflict resolution; the generated context tells the agent to ignore conflicting personal guidance and ask when a disagreement is ambiguous.
 
 ```bash
-# Safe default in Git: generate outside the repository
+# Generate outside the repository
 dotai sync
 
 # Preview the resolved mode and target without writing
 dotai sync --check
 
-# Explicit team-owned mode: update marked sections in repository files
-dotai sync --shared
-
-# Generate for specific agents
-dotai sync --agents claude,cursor
-dotai sync --agents gemini
-
-# Legacy-style full dump (roles + skill definitions inline)
-dotai sync --full
-
 # Print primer to stdout (for piping)
 dotai primer
 dotai primer --path .
-dotai primer --full
 
 # Resolve task-specific context on demand
 dotai context --path . --files src/app.tsx --context security
 dotai context --path . --skill run_review
 ```
 
-### Supported Agents
-
-| Agent | Output File | Sync Command | Notes |
-|-------|-------------|--------------|-------|
-| Claude Code | Local cache; shared: `CLAUDE.md` + `.claude/skills/` | `dotai sync --agents claude` | Team file is authoritative; shared mode uses marker-based merging |
-| Cursor | `.cursorrules` | `dotai sync --agents cursor` | Compact bootstrap by default; full context with `--full` |
-| Gemini CLI | `GEMINI.md` | `dotai sync --agents gemini` | Compact bootstrap; shared files are auto-discovered by Gemini CLI |
-| Generic | `AGENTS.md` | `dotai sync --agents generic` | Compact bootstrap for agents that read `AGENTS.md` |
-
-In explicit shared mode, Claude sync also generates
-`.claude/skills/<trigger>/SKILL.md` files. These register as native slash
-commands with role composition. Local mode never creates or cleans repository
-skill directories.
-
-> **Tip:** Run `dotai primer --full | pbcopy` to copy the complete context to your clipboard for pasting into an agent's system prompt.
+Use an agent adapter for automatic delivery. For an agent without an adapter,
+paste or pipe `dotai primer --path .`, then use `dotai context` for task-specific
+expansion.
 
 ## Installing Skills
 
@@ -768,9 +733,8 @@ dotai install ~/my-skills/review
 dotai install https://github.com/team/skills -p my-project
 ```
 
-Installed skills are immediately available to `dotai context` and `dotai
-prompt`. To expose them as repository slash commands in Claude Code, use the
-explicit team-owned path: `dotai sync --shared --agents claude`.
+Installed skills are immediately available to `dotai context` and configured
+agent adapters.
 
 Refresh skills that were installed from a tracked source (team conventions repo):
 
@@ -781,49 +745,17 @@ dotai install --update -s mvp
 
 Updates are staged and security-vetted before installation. A blocked or declined update leaves the existing skill unchanged. Multi-skill repositories refresh each recorded skill independently. `--skip-vet` is an explicit trust override and should only be used for a source you have reviewed.
 
-### Converting Claude-native skills
+### Installing other skill formats
 
-If you have a Claude-native `SKILL.md` and want to convert it manually:
-
-```bash
-# Preview what would be converted
-dotai convert /path/to/SKILL.md --dry-run
-
-# Convert to global skills
-dotai convert /path/to/SKILL.md
-
-# Convert to a specific project
-dotai convert /path/to/SKILL.md -p my-project
-
-# Convert to a custom directory
-dotai convert /path/to/skill-dir/ -o ~/my-skills/
-```
-
-The converter maps Claude-native fields (`compatibility`, `license`) to dotai format, auto-generates a `/run_*` trigger, and infers a category from the skill's name and description.
-
-### Importing from plugin ecosystems
-
-dotai can import skills from **Claude plugins**, **Cursor plugins**, and **Gemini extensions** — converting them into universal dotai format so they work across all tools.
+`dotai install` detects dotai skills, Claude-native `SKILL.md` files, Claude
+plugins, Cursor plugins, and Gemini extensions. Supported skills and commands
+are converted automatically:
 
 ```bash
-# Import from a Claude Code plugin
-dotai import-plugin /path/to/claude-plugin/
-dotai import-plugin https://github.com/user/claude-plugin
-
-# Import from a Cursor plugin
-dotai import-plugin /path/to/cursor-plugin/
-
-# Import from a Gemini CLI extension
-dotai import-plugin /path/to/gemini-extension/
-
-# Import only a specific skill from a plugin
-dotai import-plugin /path/to/plugin/ -s review-code
-
-# Also convert agents to dotai roles
-dotai import-plugin /path/to/plugin/ --include-agents
-
-# Also convert Cursor .mdc rules to dotai rules
-dotai import-plugin /path/to/cursor-plugin/ --include-rules
+dotai install /path/to/SKILL.md
+dotai install /path/to/claude-plugin/
+dotai install /path/to/cursor-plugin/
+dotai install /path/to/gemini-extension/
 ```
 
 Supported plugin formats:
@@ -831,7 +763,7 @@ Supported plugin formats:
 - **Cursor plugins** — directories with `.cursor-plugin/plugin.json`
 - **Gemini extensions** — directories with `gemini-extension.json`
 
-The importer discovers skills, commands, agents, and rules within the plugin and converts each to dotai format. Hooks and MCP server configs are noted but not converted (they're tool-specific).
+Hooks and MCP server configurations remain tool-specific and are not installed.
 
 ### Removing skills
 
@@ -871,38 +803,31 @@ dotai new-skill "Deploy" -t /run_deploy -c deployment --folder
 ```bash
 dotai init [project-path]              # Initialize ~/.ai/ or project .ai/
 dotai roles                            # List available roles
-dotai role <name>                      # Output a role's full prompt to stdout
 dotai skills [-c category]             # List skills (optionally filter by category)
-dotai prompt <skill> [--role <role>]   # Assemble skill + role prompt for any agent
-dotai sync [path] [--local|--shared] [--check] [--agents ...] [--full]
-dotai detach [path] [--apply]            # One-off removal of old shared-sync artifacts
+dotai sync [path] [--check]            # Refresh safe local context
 dotai agent setup|status|last|remove claude [--apply]  # User-level Claude delivery
-dotai primer [--project <name>|--path <path>] [--full]
+dotai insights [--agent name] [-p project] [--json]  # Local delivery evidence
+dotai primer [--project <name>|--path <path>]  # Compact generic bootstrap
 dotai context --path <path> [--task ...] [--files ...] [--context ...] [--domain ...] [--skill ...]
 dotai rules [-p project] [-a] [--check]    # List rules (or audit quality)
 dotai audit [-p project] [--json] [--fail-on severity]  # Read-only rule audit
 dotai compress [-p project] [--json]       # Plan compression candidates
 dotai compress apply <proposal.json> [--yes]  # Validate, back up, and apply proposals
 dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-project
-dotai learn "title" -i "..." -c "..."  # Create structured rule (default)
-dotai learn "title" -i "..." -c "..." --dry-run|--sync|--force|--append-md
+dotai learn "title" --directive "..."    # Teach a standard, taste, or guardrail
+dotai learn "title" -i "..." -c "..."  # Preserve a correction as a rule
+dotai learn "title" -i "..." -c "..." --dry-run|--sync|--force
 dotai learn "title" --from-file <f>    # Import structured rule from a file
 dotai import-agent <path> [-m mode] [--dry-run]  # Non-destructive agent-file migration
 dotai prefs [list|show|new|pull|use|unuse|remove]  # Preference / taste packs
 dotai prefs new "CLI" --domain cli     # Create a soft style pack
 dotai prefs pull <path|url> [-n id]    # Borrow / install a pack
 dotai prefs use <id> [-p project|--global]  # Activate pack in an explicit scope
-dotai sync --with-prefs a,b            # Session overlay of preference packs
 dotai install <source> [-s skill]      # Install skills from git repo or local path
 dotai install --update [-s skill] [--skip-vet]  # Vetted refresh from recorded sources
-dotai import-plugin <source>          # Import from Claude/Cursor/Gemini plugin
 dotai remove <skill> [-p project]     # Remove an installed skill
-dotai convert <path> [--dry-run]      # Convert Claude-native SKILL.md to dotai format
 dotai new-skill <name> [-t trigger]    # Create a new skill from template
-dotai watch [path] [--agents ...]       # Auto-resync on ~/.ai/ changes
-dotai search "query" [--type t] [--tag] # Search knowledge index
-dotai index [--refresh]                # Build/show knowledge index
-dotai tree                             # Show knowledge tree
+dotai search "query" [--type t] [--tag] # Search live knowledge
 ```
 
 ## Philosophy

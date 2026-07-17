@@ -18,7 +18,7 @@ import json
 import re
 from pathlib import Path
 
-from .models import GlobalConfig, KnowledgeNode, NodeType, Skill, SkillCategory
+from .models import GlobalConfig, Skill, SkillCategory
 from .utils import generate_id as generate_skill_id
 
 
@@ -291,38 +291,6 @@ def load_all_skills(config: GlobalConfig) -> list[Skill]:
         skills.extend(load_skills_from_dir(project.skills_path, project.name))
 
     return skills
-
-
-def build_skills_node(skills: list[Skill], category_name: str, category_id: str) -> KnowledgeNode:
-    """Build a knowledge node for a collection of skills."""
-    children = []
-
-    for skill in skills:
-        trigger_info = f" ({skill.trigger})" if skill.trigger else ""
-        cat_info = f" [{skill.category.value}]" if skill.category else ""
-        children.append(KnowledgeNode(
-            id=f"skill_{skill.id}",
-            name=skill.name + trigger_info + cat_info,
-            node_type=NodeType.SKILL,
-            summary=skill.description[:100] + "..." if len(skill.description) > 100 else skill.description,
-            file_path=skill.file_path,
-            tags=skill.tags,
-            metadata={
-                "trigger": skill.trigger,
-                "role": skill.role,
-                "scope": skill.scope,
-                "category": skill.category.value if skill.category else None,
-                "folder_skill": skill.is_folder_skill,
-            },
-        ))
-
-    return KnowledgeNode(
-        id=category_id,
-        name=category_name,
-        node_type=NodeType.CATEGORY,
-        summary=f"{len(skills)} skills available",
-        children=children,
-    )
 
 
 def create_skill_template(name: str, trigger: str | None = None,

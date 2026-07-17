@@ -4,8 +4,6 @@ from pathlib import Path
 
 from dotai.models import (
     GlobalConfig,
-    KnowledgeNode,
-    NodeType,
     ProjectConfig,
     Role,
     Rule,
@@ -126,56 +124,6 @@ class TestSkill:
         )
         prompt = skill.to_prompt()
         assert "**Active in:** production, sensitive" in prompt
-
-
-class TestKnowledgeNode:
-    def _make_tree(self):
-        child1 = KnowledgeNode(
-            id="skill-review", name="Review", node_type=NodeType.SKILL,
-            tags=["quality"], summary="Code review",
-        )
-        child2 = KnowledgeNode(
-            id="skill-test", name="Test", node_type=NodeType.SKILL,
-            tags=["testing"], summary="Run tests",
-        )
-        root = KnowledgeNode(
-            id="root", name="Root", node_type=NodeType.ROOT,
-            children=[child1, child2],
-        )
-        return root
-
-    def test_find_by_id(self):
-        root = self._make_tree()
-        assert root.find_by_id("skill-review").name == "Review"
-        assert root.find_by_id("nonexistent") is None
-
-    def test_find_by_tag(self):
-        root = self._make_tree()
-        results = root.find_by_tag("testing")
-        assert len(results) == 1
-        assert results[0].id == "skill-test"
-
-    def test_find_by_type(self):
-        root = self._make_tree()
-        skills = root.find_by_type(NodeType.SKILL)
-        assert len(skills) == 2
-
-    def test_find_by_text(self):
-        root = self._make_tree()
-        results = root.find_by_text("review")
-        assert len(results) >= 1
-
-    def test_to_toc(self):
-        root = self._make_tree()
-        toc = root.to_toc()
-        assert "Root" in toc
-        assert "Review" in toc
-
-    def test_to_compact_json(self):
-        root = self._make_tree()
-        data = root.to_compact_json()
-        assert data["id"] == "root"
-        assert len(data["children"]) == 2
 
 
 class TestGlobalConfig:

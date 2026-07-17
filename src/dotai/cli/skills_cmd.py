@@ -74,66 +74,6 @@ def _install_staged_skill(staged: Path, dest_dir: Path, key: str) -> Path:
 
 
 @app.command()
-def prompt(
-    skill_name: str = typer.Argument(..., help="Skill ID or trigger (e.g. review, /commit)"),
-    role_override: Optional[str] = typer.Option(None, "--role", "-r", help="Role to adopt (overrides skill's default role)"),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Scope to a project"),
-):
-    """Assemble a complete prompt from a skill + role, ready for any agent.
-
-    The skill's steps and the role's persona are composed into a single
-    prompt that can be piped into any AI agent.
-
-    Examples:
-      dotai prompt review --role qa
-      dotai prompt review --role paranoid-reviewer
-      dotai prompt commit
-      dotai prompt review --role qa | pbcopy
-    """
-    from ..store import load_config
-    from ..roles import load_all_roles
-    from ..skills import load_all_skills
-
-    config = load_config()
-    all_skills = load_all_skills(config)
-    all_roles = load_all_roles(config)
-
-    # Filter by project if specified
-    if project:
-        all_skills = [s for s in all_skills if s.scope == project or s.scope == "global"]
-        all_roles = [r for r in all_roles if r.scope == project or r.scope == "global"]
-
-    # Find skill by exact ID or trigger
-    clean_name = skill_name.lstrip("/")
-    skill = next((s for s in all_skills if s.id == clean_name), None)
-    if not skill:
-        skill = next((s for s in all_skills if s.trigger and s.trigger.lstrip("/") == clean_name), None)
-
-    if not skill:
-        console.print(f"[red]Skill '{skill_name}' not found.[/red]")
-        console.print("Available skills:")
-        for s in all_skills:
-            trigger = f" ({s.trigger})" if s.trigger else ""
-            console.print(f"  {s.id}{trigger}: {s.description[:50]}")
-        raise typer.Exit(1)
-
-    # Resolve role: explicit override > skill's default > none
-    role_id = role_override or skill.role
-    resolved_role = None
-    if role_id:
-        resolved_role = next((r for r in all_roles if r.id == role_id), None)
-        if not resolved_role:
-            console.print(f"[red]Role '{role_id}' not found.[/red]")
-            console.print("Available roles:")
-            for r in all_roles:
-                console.print(f"  {r.id}: {r.description[:60]}")
-            raise typer.Exit(1)
-
-    # print() intentional — stdout for piping, no Rich markup
-    print(skill.to_prompt(resolved_role=resolved_role))
-
-
-@app.command()
 def skills(
     category: Optional[str] = typer.Option(None, "--category", "-c", help="Filter by category"),
 ):
@@ -417,69 +357,6 @@ def install(
 
 
 @app.command()
-def convert(
-    source: str = typer.Argument(..., help="Path to Claude-native SKILL.md file or directory"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output directory (default: global skills dir)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be converted without writing"),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Install converted skill to a project"),
-):
-    """Convert a Claude-native SKILL.md to dotai format.
-
-    Examples:
-      dotai convert /path/to/SKILL.md
-      dotai convert /path/to/skill-dir/ --dry-run
-      dotai convert /path/to/SKILL.md -o ~/my-skills/
-    """
-    from ..converter import detect_skill_format, convert_claude_to_dotai
-    from ..store import load_config
-
-    source_path = Path(source).expanduser().resolve()
-    if not source_path.exists():
-        console.print(f"[red]Source not found: {source_path}[/red]")
-        raise typer.Exit(1)
-
-    fmt = detect_skill_format(source_path)
-    if fmt == "dotai":
-        console.print(f"[yellow]Already in dotai format: {source_path}[/yellow]")
-        raise typer.Exit(0)
-    if fmt == "unknown":
-        console.print(f"[yellow]Unknown format (will attempt conversion): {source_path}[/yellow]")
-
-    if dry_run:
-        from ..converter import parse_claude_skill_md, _detect_structure_in_body
-        parsed = parse_claude_skill_md(source_path)
-        detected = _detect_structure_in_body(parsed["body"])
-        console.print(f"[bold]Source:[/bold] {source_path}")
-        console.print(f"[bold]Format:[/bold] {fmt}")
-        console.print(f"[bold]Name:[/bold] {parsed['frontmatter'].get('name', source_path.stem)}")
-        console.print(f"[bold]Description:[/bold] {parsed['frontmatter'].get('description', detected['description'][:80])}")
-        console.print(f"[bold]Structured:[/bold] {detected['is_structured']}")
-        console.print(f"[bold]Steps:[/bold] {len(detected['steps'])}")
-        console.print(f"[bold]Inputs:[/bold] {len(detected['inputs'])}")
-        console.print(f"[bold]Examples:[/bold] {len(detected['examples'])}")
-        console.print(f"[bold]Has scripts/:[/bold] {parsed['has_scripts']}")
-        console.print(f"[bold]Has assets/:[/bold] {parsed['has_assets']}")
-        return
-
-    # Determine destination
-    if output:
-        dest_dir = Path(output).expanduser().resolve()
-    elif project:
-        config = load_config()
-        proj = config.get_project(project)
-        if not proj:
-            console.print(f"[red]Project '{project}' not found[/red]")
-            raise typer.Exit(1)
-        dest_dir = proj.skills_path
-    else:
-        config = load_config()
-        dest_dir = config.global_skills_path
-
-    result = convert_claude_to_dotai(source_path, dest_dir)
-    console.print(f"[green]Converted:[/green] {source_path.name} -> {result}")
-
-
-@app.command()
 def remove(
     skill_name: str = typer.Argument(..., help="Skill ID or filename to remove (e.g. mvp, review.md)"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Remove from a project instead of global"),
@@ -628,8 +505,7 @@ def new_skill(
     console.print(f"  Edit the skill to customize its behavior.")
 
 
-@app.command()
-def import_plugin(
+def _import_plugin_legacy(
     source: str = typer.Argument(..., help="Path or git URL to a Claude plugin, Cursor plugin, or Gemini extension"),
     skill_name: Optional[str] = typer.Option(None, "--skill", "-s", help="Import only a specific skill by name"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Install to a project instead of global"),
@@ -642,10 +518,10 @@ def import_plugin(
     Also supports importing agents (as roles) and Cursor rules.
 
     Examples:
-      dotai import-plugin /path/to/claude-plugin/
-      dotai import-plugin /path/to/cursor-plugin/ --include-rules
-      dotai import-plugin /path/to/gemini-extension/ -s my-skill
-      dotai import-plugin https://github.com/user/claude-plugin
+      dotai install /path/to/claude-plugin/
+      dotai install /path/to/cursor-plugin/
+      dotai install /path/to/gemini-extension/ -s my-skill
+      dotai install https://github.com/user/claude-plugin
     """
     import shutil
     from ..converter import (

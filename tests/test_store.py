@@ -2,13 +2,11 @@
 
 import json
 
-from dotai.models import GlobalConfig, KnowledgeNode, NodeType, ProjectConfig
+from dotai.models import GlobalConfig, ProjectConfig
 from dotai.store import (
     get_config_dir,
     load_config,
-    load_index,
     save_config,
-    save_index,
     set_config_dir,
 )
 
@@ -41,33 +39,5 @@ class TestConfigPersistence:
             config = load_config()
             assert config.version == "1.0.0"
             assert config.projects == []
-        finally:
-            set_config_dir(None)
-
-
-class TestIndexPersistence:
-    def test_save_and_load(self, config_dir):
-        set_config_dir(config_dir)
-        try:
-            node = KnowledgeNode(
-                id="root",
-                name="Root",
-                node_type=NodeType.ROOT,
-                children=[
-                    KnowledgeNode(id="child", name="Child", node_type=NodeType.SKILL)
-                ],
-            )
-            save_index(node)
-            loaded = load_index()
-            assert loaded is not None
-            assert loaded.id == "root"
-            assert len(loaded.children) == 1
-        finally:
-            set_config_dir(None)
-
-    def test_load_missing_returns_none(self, config_dir):
-        set_config_dir(config_dir)
-        try:
-            assert load_index() is None
         finally:
             set_config_dir(None)

@@ -352,13 +352,15 @@ def _cmd_show(config, pack_id: str) -> None:
 
 
 def _run_sync() -> None:
-    from ..store import load_config
-    from ..sync import sync_project
+    from ..store import get_config_dir, load_config
+    from ..sync import plan_sync, sync_local_context
 
     config = load_config()
     project_path = Path.cwd()
     project_config = next((p for p in config.projects if p.path == project_path), None)
     project_name = project_config.name if project_config else None
-    written = sync_project(project_path, config, project_name)
+    written = sync_local_context(
+        plan_sync(project_path, get_config_dir()), config, project_name
+    )
     for f in written:
         console.print(f"  [green]Synced[/green] {f}")

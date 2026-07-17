@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dotai-cli"
-version = "0.5.0"
-description = "Universal AI context for any coding agent. Roles, skills, and rules in ~/.ai/"
+version = "0.6.0"
+description = "Portable engineering judgment for coding agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -25,7 +25,6 @@ dependencies = [
     "pydantic>=2.0",
     "typer>=0.9",
     "rich>=13.0",
-    "watchdog>=4.0",
     "ai-skill-audit>=0.5.1",
 ]
 

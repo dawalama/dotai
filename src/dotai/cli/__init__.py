@@ -16,7 +16,7 @@ def _version_callback(value: bool):
         raise typer.Exit()
 
 
-app = typer.Typer(help="Universal AI context for any coding agent.", no_args_is_help=True)
+app = typer.Typer(help="Portable engineering judgment for coding agents.", no_args_is_help=True)
 
 
 @app.callback()
@@ -73,12 +73,9 @@ def init(
         console.print(f"  Created: rules.md, roles/, skills/, preferences/, tools/")
 
         # Prepare context without silently taking ownership of team agent files.
-        from ..sync import plan_sync, sync_local_context, sync_project
+        from ..sync import plan_sync, sync_local_context
         plan = plan_sync(project_path, get_config_dir())
-        if plan.mode == "local":
-            written = sync_local_context(plan, config, project_path.name)
-        else:
-            written = sync_project(project_path, config, project_path.name)
+        written = sync_local_context(plan, config, project_path.name)
         for f in written:
             console.print(f"  [green]Synced[/green] {f}")
     else:
@@ -134,9 +131,19 @@ def init(
         # Create starter files
         if not (ai_dir / "rules.md").exists():
             (ai_dir / "rules.md").write_text(
-                "# Global Rules\n\nUniversal AI coding rules across all projects.\n\n"
-                "## Code Quality\n\n- Write clear, readable code\n- Handle errors explicitly\n"
-                "- Prefer simple solutions over clever ones\n"
+                "# Global Rules\n\n"
+                "Freeform, always-on notes that apply across every project. dotai inlines\n"
+                "this file verbatim into resolved context, so keep it short and high-signal —\n"
+                "every line here is spent on every task.\n\n"
+                "Precedence: repository/team instructions > structured rules (`rules/*.md`) >\n"
+                "this file > preference packs > model default. Don't restate what the model\n"
+                "already does well (\"write clean code\", \"handle errors\"); capture only the\n"
+                "conventions it would otherwise get wrong.\n\n"
+                "For anything with a clear trigger — a file type, a design choice, a\n"
+                "security boundary — prefer a structured rule so it loads only when relevant:\n\n"
+                "    dotai learn \"title\" --directive \"what to do\"\n\n"
+                "## Your rules\n\n"
+                "<!-- Add durable, cross-project conventions below, then delete this line. -->\n"
             )
         console.print(f"[green]Initialized ~/.ai/[/green]")
         console.print(f"  {ai_dir}/rules.md")
@@ -146,7 +153,9 @@ def init(
         console.print(f"  {ai_dir}/tools/")
         console.print(f"\n[dim]Next: cd into a project and run `dotai sync` to prepare safe local context.[/dim]")
         console.print(f"[dim]Have an existing CLAUDE.md / AGENTS.md?  `dotai import-agent CLAUDE.md --dry-run`[/dim]")
-        console.print(f"[dim]Capture a correction:  `dotai learn \"title\" -i \"issue\" -c \"correction\" --dry-run`[/dim]")
+        console.print(
+            "[dim]Teach a rule:  `dotai learn \"title\" --directive \"what to do\" --dry-run`[/dim]"
+        )
         console.print(f"[dim]Borrow style:  `dotai prefs new \"CLI\" --domain cli` then `dotai prefs use cli`[/dim]")
 
 
@@ -156,5 +165,5 @@ from . import skills_cmd  # noqa: E402, F401
 from . import rules_cmd   # noqa: E402, F401
 from . import prefs_cmd   # noqa: E402, F401
 from . import sync_cmd    # noqa: E402, F401
-from . import watch_cmd   # noqa: E402, F401
 from . import agents_cmd  # noqa: E402, F401
+from . import insights_cmd  # noqa: E402, F401
