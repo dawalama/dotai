@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dotai-cli"
-version = "0.6.0"
+version = "0.7.0"
 description = "Portable engineering judgment for coding agents"
 readme = "README.md"
 license = "MIT"

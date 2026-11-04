@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-04
+
 ### Changed
 
 - Share project discovery and override handling between context resolution and
