@@ -69,6 +69,10 @@ class Rule(BaseModel):
     file_path: Path | None = None
     scope: str = "global"
 
+    @property
+    def is_universal(self) -> bool:
+        return not self.globs or any(g in {"*", "**", "**/*"} for g in self.globs)
+
     def to_prompt(self) -> str:
         """Generate the rule prompt for LLM injection."""
         lines = [f"### Rule: {self.name}"]
@@ -162,6 +166,8 @@ class Skill(BaseModel):
     scope: str = "global"  # "global" or project name
     source: str = ""  # Where this skill was installed from (git URL, local path, or "seed")
     raw_body: str = ""  # Full markdown body for runbook-style skills
+    source_body: str | None = None  # Original body; takes precedence over extracted fields
+    frontmatter_gotchas: list[str] = Field(default_factory=list)
 
     @property
     def is_folder_skill(self) -> bool:
@@ -191,8 +197,12 @@ class Skill(BaseModel):
 
         lines.append(f"# Skill: {self.name}")
         lines.append("")
-        lines.append(f"**Description:** {self.description}")
-        lines.append("")
+        if self.source_body is None or (self.description and self.description not in self.source_body):
+            lines.append(f"**Description:** {self.description}")
+            lines.append("")
+        if self.file_path:
+            lines.extend([f"**Skill source:** `{self.file_path}`", "",
+                          f"Resolve relative resources from `{self.assets_dir or self.file_path.parent}`.", ""])
 
         if self.category:
             lines.append(f"**Category:** {self.category.value}")
@@ -206,23 +216,26 @@ class Skill(BaseModel):
             lines.append(f"**Active in:** {', '.join(self.context)}")
             lines.append("")
 
-        if self.inputs:
+        if self.inputs and self.source_body is None:
             lines.append("## Inputs")
             for inp in self.inputs:
                 required = "(required)" if inp.get("required") else "(optional)"
                 lines.append(f"- `{inp['name']}` {required}: {inp.get('description', '')}")
             lines.append("")
 
-        if self.gotchas:
-            lines.append("## Gotchas")
+        gotchas = self.gotchas if self.source_body is None else self.frontmatter_gotchas
+        if gotchas:
+            lines.append("## Gotchas" if self.source_body is None else "## Additional Gotchas")
             lines.append("")
             lines.append("Common failure points — pay extra attention to these:")
             lines.append("")
-            for gotcha in self.gotchas:
+            for gotcha in gotchas:
                 lines.append(f"- ⚠️ {gotcha}")
             lines.append("")
 
-        if self.raw_body:
+        if self.source_body is not None:
+            lines.append(self.source_body)
+        elif self.raw_body:
             # Runbook-style: include full markdown body
             lines.append(self.raw_body)
         elif self.steps:
@@ -231,7 +244,7 @@ class Skill(BaseModel):
                 lines.append(f"{i}. {step}")
             lines.append("")
 
-        if self.examples:
+        if self.examples and self.source_body is None:
             lines.append("## Examples")
             for ex in self.examples:
                 lines.append(f"- {ex}")

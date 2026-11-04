@@ -53,8 +53,9 @@ def agent(
         console.print(f"  Project: {receipt.get('project_path', 'unknown')}")
         console.print(f"  Task: {receipt.get('task') or 'not provided'}")
         provisional = bool(receipt.get("provisional"))
-        console.print(f"  Resolution: {'provisional' if provisional else 'complete'}")
+        console.print(f"  Resolution: {'provisional' if provisional else 'resolved'}")
         files = receipt.get("files") or []
+        console.print(f"  File scope: {'provided' if files else 'unknown'}")
         console.print(f"  Files: {', '.join(files) if files else 'not known'}")
         console.print(f"  Skill: {receipt.get('skill') or 'none'}")
         console.print(f"  Role: {receipt.get('role') or 'none'}")

@@ -28,7 +28,8 @@ def test_insights_aggregate_selection_and_exposure(
     report = build_insights(config, receipts_dir)
 
     assert report.resolutions == 2
-    assert report.complete == 2
+    assert report.complete == 1
+    assert report.provisional == 1
     rule = next(item for item in report.items if item.item_id == "no-console-log")
     assert rule.selected == 1
     skill = next(item for item in report.items if item.item_id == "test-skill")

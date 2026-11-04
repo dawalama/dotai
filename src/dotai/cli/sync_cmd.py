@@ -22,10 +22,6 @@ def sync(
     config = load_config()
     project_path = Path(path).expanduser().resolve()
 
-    # Find project name
-    project_config = next((p for p in config.projects if p.path == project_path), None)
-    project_name = project_config.name if project_config else None
-
     plan = plan_sync(project_path, get_config_dir())
 
     console.print(f"Mode: [bold]{plan.mode}[/bold]")
@@ -36,7 +32,7 @@ def sync(
     if check:
         return
 
-    written = sync_local_context(plan, config, project_name)
+    written = sync_local_context(plan, config)
 
     for f in written:
         console.print(f"  [green]Synced[/green] {f}")
@@ -53,14 +49,13 @@ def primer(
 
     config = load_config()
     project_path = Path(path).expanduser().resolve() if path else None
-    if project_path:
-        matched = next((p for p in config.projects if p.path == project_path), None)
-        if matched:
-            project = matched.name
-    typer.echo(generate_primer(
-        config, project, project_path=project_path,
-        compact=True,
-    ))
+    try:
+        typer.echo(generate_primer(
+            config, project, project_path=project_path, compact=True,
+        ))
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from error
 
 
 @app.command("context")
@@ -88,13 +83,10 @@ def resolve_task_context(
 
     config = load_config()
     project_path = Path(path).expanduser().resolve()
-    matched = next((p for p in config.projects if p.path == project_path), None)
-    project_name = matched.name if matched else None
     try:
         resolved = resolve_context(
             config,
             project_path,
-            project_name,
             task=task,
             files=split(files),
             contexts=split(contexts),

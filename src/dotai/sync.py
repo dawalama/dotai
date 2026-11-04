@@ -3,17 +3,17 @@
 import hashlib
 import json
 import shutil
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from .models import GlobalConfig, Role, Skill
-from .preferences import format_preferences_section, resolve_preference_packs
+from .preferences import format_preferences_section
 from .roles import load_all_roles
-from .rules import load_rules_from_dir, load_rules_md, resolve_rules_for_project
 from .skills import load_all_skills
+from .catalog import load_catalog
+from .scope import find_git_root
 
 SyncMode = Literal["local"]
 
@@ -34,22 +34,6 @@ TEAM_INSTRUCTION_FILES = {
     "gemini": "GEMINI.md",
     "generic": "AGENTS.md",
 }
-
-
-def find_git_root(project_path: Path) -> Path | None:
-    """Return the containing Git root without inspecting remotes or changing state."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(project_path), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return None
-    if result.returncode != 0:
-        return None
-    return Path(result.stdout.strip()).resolve()
 
 
 def local_context_dir(project_path: Path, config_dir: Path) -> Path:
@@ -129,57 +113,16 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
 
     Modes:
       - default: full rule bodies + freeform rules.md + active prefs; roles/skills as catalogs
-      - compact=True: summaries + file pointers (agents that can read files)
+      - compact=True: universal directives + scoped-rule count + catalogs/pointers
       - full=True: inline full role personas and skill definitions (legacy dump)
       - extra_prefs: session overlay pack ids (on top of project/global active)
     """
-    ai_dir = config.global_ai_dir
-    roles = load_all_roles(config)
-    rules = resolve_rules_for_project(config, project_name)
-    skills = load_all_skills(config)
-    pref_packs = resolve_preference_packs(
-        config, project_name, project_path, extra=extra_prefs
-    )
-
-    # Discover local project rules that aren't managed by dotai
-    if project_path:
-        local_rules_dir = project_path / ".ai" / "rules"
-        local_rules = load_rules_from_dir(local_rules_dir, project_name or "local")
-        # Merge: local rules that aren't already in the resolved set
-        existing_ids = {r.id for r in rules}
-        for lr in local_rules:
-            if lr.id not in existing_ids and lr.enabled:
-                rules.append(lr)
-
-    # Filter to project scope if specified
-    if project_name:
-        project_roles = [r for r in roles if r.scope == project_name or r.scope == "global"]
-        project_skills = [s for s in skills if s.scope == project_name or s.scope == "global"]
-    else:
-        project_roles = roles
-        project_skills = skills
-
-    project_rules = rules
-
-    # Freeform rules.md (global + project) — was previously only referenced, never inlined
-    freeform_sections: list[tuple[str, str, Path]] = []
-    global_rules_md = load_rules_md(ai_dir)
-    if global_rules_md:
-        freeform_sections.append(("Global (rules.md)", global_rules_md, ai_dir / "rules.md"))
-    if project_path:
-        local_md = load_rules_md(project_path / ".ai")
-        if local_md:
-            freeform_sections.append((
-                "Project (.ai/rules.md)", local_md, project_path / ".ai" / "rules.md"
-            ))
-    elif project_name:
-        proj = config.get_project(project_name)
-        if proj:
-            local_md = load_rules_md(proj.full_ai_path)
-            if local_md:
-                freeform_sections.append((
-                    "Project (.ai/rules.md)", local_md, proj.full_ai_path / "rules.md"
-                ))
+    catalog = load_catalog(config, project_name, project_path, extra_prefs)
+    project_roles = catalog.roles
+    project_skills = catalog.skills
+    project_rules = catalog.rules
+    pref_packs = catalog.preferences
+    freeform_sections = [(note.scope, note.body, note.path) for note in catalog.notes]
 
     lines = [
         "# AI Knowledge Base (~/.ai/)",
@@ -235,12 +178,16 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         lines.append("## Active Rules")
         lines.append("")
         if compact and not full:
-            # Summary table with file pointers — agent reads full rule on demand
+            scoped_count = 0
             for rule in project_rules:
-                globs = f" (applies to: `{', '.join(rule.globs)}`)" if rule.globs else ""
-                lines.append(f"- **{rule.name}**: {rule.description}{globs}")
+                if rule.is_universal:
+                    lines.extend([rule.to_prompt(), ""])
+                else:
+                    scoped_count += 1
+            if scoped_count:
+                lines.append(f"{scoped_count} file-scoped rules available via `dotai context --path . --files <paths>`.")
             lines.append("")
-            lines.append("Read each rule file fully before acting in matching paths.")
+            lines.append("Resolve affected files before acting so their scoped rules are loaded.")
             lines.append("")
         else:
             # Full inline content (default for agents that may not read external files)
@@ -339,7 +286,7 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
     lines.extend([
         "## How to Use",
         "",
-        "1. **Start of session**: Keep universal rule summaries and the team-authority boundary active",
+        "1. **Start of session**: Keep universal directives and the team-authority boundary active",
         "2. **Before a task**: Run `dotai context --path . --files <paths>` and load a skill only when selected",
         "3. **Teach judgment**: Use `dotai learn --directive` for standards and taste; capture corrections when needed",
         "4. **Borrow style**: Preference packs (`dotai prefs use`) are soft taste — never override hard rules",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -18,10 +19,7 @@ from .models import (
     Skill,
     SkillCategory,
 )
-from .preferences import resolve_preference_packs
-from .roles import load_all_roles, load_roles_from_dir
-from .rules import load_rules_from_dir, resolve_rules_for_project
-from .skills import load_all_skills, load_skills_from_dir
+from .catalog import FreeformNote, load_catalog
 
 
 @dataclass(frozen=True)
@@ -31,6 +29,7 @@ class Selection:
     kind: str
     item_id: str
     reason: str
+    source: str | None = None
 
 
 @dataclass
@@ -47,10 +46,15 @@ class ResolvedContext:
     skill: Skill | None = None
     role: Role | None = None
     selections: list[Selection] = field(default_factory=list)
+    notes: list[FreeformNote] = field(default_factory=list)
+    available_preferences: list[PreferencePack] = field(default_factory=list)
+    scoped_rule_count: int = 0
 
     @property
     def requires_files(self) -> bool:
         """Whether this workflow can miss scoped rules without affected files."""
+        if self.scoped_rule_count:
+            return True
         if not self.skill or not self.skill.category:
             return False
         return self.skill.category in {
@@ -81,6 +85,7 @@ class ResolvedContext:
             "contexts": self.contexts,
             "requires_files": self.requires_files,
             "provisional": self.provisional,
+            "file_scope": "provided" if self.files else "unknown",
             "rule_summaries": [
                 {"id": r.id, "description": r.description, "globs": r.globs}
                 for r in self.rule_summaries
@@ -104,6 +109,14 @@ class ResolvedContext:
                 }
                 for p in self.preferences
             ],
+            "available_preferences": [
+                {"id": p.id, "domain": p.domain, "description": p.description}
+                for p in self.available_preferences
+            ],
+            "notes": [
+                {"source": str(n.path), "scope": n.scope, "body": n.body}
+                for n in self.notes
+            ],
             "skill": (
                 {"id": self.skill.id, "prompt": self.skill.to_prompt(self.role)}
                 if self.skill else None
@@ -123,8 +136,6 @@ class ResolvedContext:
             "Repository and organization instructions are authoritative. Personal dotai",
             "context is supplemental and must be ignored where it conflicts with team guidance.",
             "",
-            "## Universal Rule Index",
-            "",
         ]
         if self.provisional:
             lines.extend([
@@ -136,12 +147,6 @@ class ResolvedContext:
                 "Do not treat this initial resolution as complete.",
                 "",
             ])
-        if self.rule_summaries:
-            for rule in self.rule_summaries:
-                lines.append(f"- **{rule.name}** (`{rule.id}`): {rule.description}")
-        else:
-            lines.append("- No universal rules are active.")
-
         if self.rules:
             lines.extend(["", "## Expanded Rules", ""])
             for rule in self.rules:
@@ -149,6 +154,17 @@ class ResolvedContext:
                 lines.append("")
                 lines.append(rule.to_prompt())
                 lines.append("")
+
+        if self.notes:
+            lines.extend(["", "## Freeform Conventions (rules.md)", ""])
+            for note in self.notes:
+                lines.extend([f"### {note.scope}", f"Source: `{note.path}`", "", note.body, ""])
+
+        if self.available_preferences:
+            lines.extend(["", "## Available Active Preference Domains", ""])
+            for pack in self.available_preferences:
+                lines.append(f"- `{pack.id}`: {pack.description} (domain: `{pack.domain}`)")
+            lines.extend(["", "Load a relevant domain with `--domain <domain>` or a named pack with `--with-prefs <id>`.", ""])
 
         if self.preferences:
             lines.extend(["", "## Expanded Preferences", ""])
@@ -191,14 +207,16 @@ def save_resolution_receipt(
         "contexts": resolved.contexts,
         "requires_files": resolved.requires_files,
         "provisional": resolved.provisional,
+        "file_scope": "provided" if resolved.files else "unknown",
         "universal_rules": [rule.id for rule in resolved.rule_summaries],
         "expanded_rules": [rule.id for rule in resolved.rules],
         "preferences": [pack.id for pack in resolved.preferences],
+        "notes": [str(note.path) for note in resolved.notes],
         "skill": resolved.skill.id if resolved.skill else None,
         "role": resolved.role.id if resolved.role else None,
         "selections": [selection.__dict__ for selection in resolved.selections],
     }
-    temporary = receipts_dir / f".{agent_id}.json.tmp"
+    temporary = receipts_dir / f".{agent_id}.{uuid.uuid4().hex}.json.tmp"
     temporary.write_text(json.dumps(payload, indent=2) + "\n")
     temporary.replace(path)
 
@@ -208,16 +226,17 @@ def save_resolution_receipt(
     history_temporary = history_dir / f".{history_path.name}.tmp"
     history_temporary.write_text(json.dumps(payload, indent=2) + "\n")
     history_temporary.replace(history_path)
-    history_files = sorted(
-        (
-            item for item in history_dir.glob("*.json")
-            if item.is_file() and not item.is_symlink()
-        ),
-        key=lambda item: item.stat().st_mtime_ns,
-        reverse=True,
-    )
-    for stale in history_files[500:]:
-        stale.unlink()
+    history_files = []
+    for item in history_dir.glob("*.json"):
+        if item.is_symlink() or not item.is_file():
+            continue
+        try:
+            history_files.append((item.stat().st_mtime_ns, item))
+        except FileNotFoundError:
+            continue  # Another writer may already have pruned this event.
+    history_files.sort(reverse=True)
+    for _, stale in history_files[500:]:
+        stale.unlink(missing_ok=True)
     return path
 
 
@@ -236,9 +255,17 @@ def load_resolution_receipt(agent: str, receipts_dir: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _matches_file(rule: Rule, files: list[str]) -> str | None:
+def _matches_file(
+    rule: Rule, files: list[str], project_path: Path, rule_root: Path | None,
+) -> str | None:
     for filename in files:
-        normalized = filename.replace("\\", "/").lstrip("./")
+        normalized = filename.replace("\\", "/")
+        if rule_root:
+            try:
+                logical_path = Path(os.path.abspath(project_path / normalized))
+                normalized = logical_path.relative_to(rule_root).as_posix()
+            except ValueError:
+                continue  # This path lies outside the rule's owning scope.
         for pattern in rule.globs:
             if pattern in {"*", "**", "**/*"}:
                 continue
@@ -305,67 +332,60 @@ def resolve_context(
     domains = [d.lower() for d in (domains or [])]
     requested_rules = {r.lower() for r in (rule_ids or [])}
 
-    rules = resolve_rules_for_project(config, project_name)
-    local_rules = load_rules_from_dir(project_path / ".ai" / "rules", project_name or "local")
-    by_id = {r.id: r for r in rules}
-    by_id.update({r.id: r for r in local_rules if r.enabled})
-    rules = list(by_id.values())
+    catalog = load_catalog(config, project_name, project_path, extra_prefs)
+    rules = catalog.rules
 
     result = ResolvedContext(
-        project_path=project_path, task=task, files=files, contexts=contexts
+        project_path=catalog.scope.project_path, task=task, files=files, contexts=contexts,
+        notes=catalog.notes, scoped_rule_count=sum(not r.is_universal for r in rules),
     )
+    for note in result.notes:
+        result.selections.append(Selection(
+            "note", str(note.path), f"freeform conventions in scope `{note.scope}`", str(note.path)
+        ))
     for rule in rules:
-        universal = not rule.globs or any(g in {"*", "**", "**/*"} for g in rule.globs)
-        if universal:
+        if rule.is_universal:
             result.rule_summaries.append(rule)
 
-        reason = _matches_file(rule, files)
+        reason = _matches_file(rule, files, result.project_path, catalog.rule_roots[rule.id])
         if not reason and contexts and set(t.lower() for t in rule.tags) & set(contexts):
             matched = sorted(set(t.lower() for t in rule.tags) & set(contexts))
             reason = f"rule tag matches context: {', '.join(matched)}"
         if not reason and rule.id.lower() in requested_rules:
             reason = "explicitly requested"
+        if not reason and rule.is_universal:
+            reason = "universal rule applies to every task"
         if reason:
             result.rules.append(rule)
-            result.selections.append(Selection("rule", rule.id, reason))
+            result.selections.append(Selection("rule", rule.id, reason, str(rule.file_path)))
 
     unknown_rules = requested_rules - {r.id.lower() for r in rules}
     if unknown_rules:
         raise ValueError(f"Unknown rule(s): {', '.join(sorted(unknown_rules))}")
 
-    active_prefs = resolve_preference_packs(
-        config, project_name, project_path, extra=extra_prefs
-    )
-    for pack in active_prefs:
-        if pack.domain.lower() in domains:
+    for pack in catalog.preferences:
+        reason = None
+        if pack.id in (extra_prefs or []):
+            reason = "explicitly requested preference pack"
+        elif pack.domain.lower() == "general":
+            reason = "active general preference pack"
+        elif pack.domain.lower() in domains:
+            reason = f"active pack matches requested domain `{pack.domain}`"
+        if reason:
             result.preferences.append(pack)
             result.selections.append(Selection(
-                "preference", pack.id, f"active pack matches requested domain `{pack.domain}`"
+                "preference", pack.id, reason, str(pack.file_path)
             ))
+        else:
+            result.available_preferences.append(pack)
 
-    scoped_skills = [
-        s for s in load_all_skills(config)
-        if s.scope in {"global", project_name}
-    ]
-    local_skills = load_skills_from_dir(
-        project_path / ".ai" / "skills", project_name or "local"
-    )
-    scoped_skills = list({s.id: s for s in [*scoped_skills, *local_skills]}.values())
-    scoped_roles = [
-        r for r in load_all_roles(config)
-        if r.scope in {"global", project_name}
-    ]
-    local_roles = load_roles_from_dir(
-        project_path / ".ai" / "roles", project_name or "local"
-    )
-    scoped_roles = list({r.id: r for r in [*scoped_roles, *local_roles]}.values())
-    result.skill = _find(scoped_skills, skill_id, "skill")
+    result.skill = _find(catalog.skills, skill_id, "skill")
     routed_skill = False
     if not result.skill and task:
-        result.skill = _route_skill(scoped_skills, task)
+        result.skill = _route_skill(catalog.skills, task)
         routed_skill = result.skill is not None
     requested_role = role_id or (result.skill.role if result.skill else None)
-    result.role = _find(scoped_roles, requested_role, "role")
+    result.role = _find(catalog.roles, requested_role, "role")
     if result.skill:
         reason = (
             f"unambiguous task alias in `{task}`"

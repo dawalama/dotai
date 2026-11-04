@@ -199,7 +199,8 @@ class TestLocalSync:
         assert "Team Instructions (CLAUDE.md) — Authoritative" in context
         assert "Use the team formatter." in context
         assert "Personal dotai Context — Supplemental" in context
-        assert "no-console-log" in context
+        assert "1 file-scoped rules available" in context
+        assert "no-console-log" not in context
         assert "Remove all `console.log` statements" not in context
         assert str(plan.target_path / "manifest.json") in written
 
@@ -238,7 +239,7 @@ class TestSyncErrors:
         def missing_git(*args, **kwargs):
             raise FileNotFoundError
 
-        monkeypatch.setattr("dotai.sync.subprocess.run", missing_git)
+        monkeypatch.setattr("dotai.scope.subprocess.run", missing_git)
 
         assert find_git_root(tmp_path) is None
 

@@ -131,16 +131,13 @@ def parse_skill_file(file_path: Path, scope: str = "global",
     frontmatter: dict[str, str] = {}
     body = content
 
-    if content.startswith("---"):
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            fm_content = parts[1].strip()
-            body = parts[2].strip()
-
-            for line in fm_content.split("\n"):
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    frontmatter[key.strip().lower()] = value.strip()
+    match = re.match(r"\A---[ \t]*\r?\n(.*?)^---[ \t]*(?:\r?\n|\Z)", content, re.DOTALL | re.MULTILINE)
+    if match:
+        body = content[match.end():]
+        for line in match[1].splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                frontmatter[key.strip().lower()] = value.strip()
 
     name = frontmatter.get("name", file_path.stem.replace("-", " ").replace("_", " ").title())
     trigger = frontmatter.get("trigger")
@@ -221,7 +218,7 @@ def parse_skill_file(file_path: Path, scope: str = "global",
     return Skill(
         id=generate_skill_id(name),
         name=name,
-        description=description.strip(),
+        description=frontmatter.get("description") or description.strip(),
         category=category,
         trigger=trigger,
         role=role,
@@ -237,6 +234,8 @@ def parse_skill_file(file_path: Path, scope: str = "global",
         config=skill_config or {},
         scope=scope,
         raw_body=raw_body,
+        source_body=body,
+        frontmatter_gotchas=gotchas,
     )
 
 

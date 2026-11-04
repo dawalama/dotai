@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Share project discovery and override handling between context resolution and
+  primers, including nested directories, custom knowledge paths, and disabled
+  local overrides. Unrelated registered projects are excluded.
+- Deliver full universal rule bodies and freeform conventions in resolved
+  context. Compact primers replace individual scoped-rule listings with a count
+  and resolver pointer.
+- Load active general preferences by default, advertise other active domains,
+  and honor explicitly requested packs independently of domain selection.
+- Preserve complete bodies when loading existing dotai skills while retaining
+  structured Python fields and identifying the source directory.
+- Report file-scope facts separately from resolution status; missing files keep
+  a resolution provisional whenever scoped rules exist.
+
+### Fixed
+
+- Match inherited rule globs from nested working directories and preserve hidden
+  and symlinked file names during matching.
+- Avoid receipt temporary-file collisions and tolerate concurrent history
+  pruning at the retention limit.
+
 ## 0.6.0 — 2026-07-17
 
 ### Added

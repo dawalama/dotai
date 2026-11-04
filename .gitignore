@@ -14,3 +14,6 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 .dotai-compression-proposal.json
+
+# Local review sessions
+.rdc/

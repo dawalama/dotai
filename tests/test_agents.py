@@ -1,6 +1,10 @@
 """Tests for user-level agent adapter planning and application."""
 
 import pytest
+from typer.testing import CliRunner
+
+from dotai.cli import app
+from dotai.context import resolve_context, save_resolution_receipt
 
 from dotai.agents import (
     ADAPTER_MARKER_END,
@@ -108,3 +112,14 @@ def test_apply_rechecks_for_symlink_swap(tmp_path):
     with pytest.raises(ValueError, match="symlinked"):
         apply_agent_plan(plan, tmp_path / "backups")
     assert outside.read_text() == "Do not touch\n"
+
+
+def test_last_reports_resolution_and_file_scope_separately(ai_dir, config, tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr("dotai.store._config_dir", config_dir)
+    save_resolution_receipt(resolve_context(config, ai_dir.parent), "claude", config_dir / "receipts")
+    result = CliRunner().invoke(app, ["agent", "last", "claude"])
+    assert result.exit_code == 0
+    assert "Resolution: resolved" in result.output
+    assert "File scope: unknown" in result.output
+    assert "complete" not in result.output

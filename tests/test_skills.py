@@ -147,3 +147,53 @@ class TestLoadSkillsFromDir:
 
     def test_missing_dir(self, tmp_path):
         assert load_skills_from_dir(tmp_path / "nope") == []
+
+
+def test_skill_renders_complete_source_body_once(tmp_path):
+    body = """Unique introduction.
+
+## Constraints
+
+Never drop this arbitrary section.
+
+## Inputs
+
+- `scope` (optional): The scope
+
+## Steps
+
+1. Inspect the change.
+   - Preserve nested detail.
+
+   Continuation paragraph.
+
+## Gotchas
+
+- Preserve this body gotcha.
+
+## Examples
+
+- Unique example.
+"""
+    path = tmp_path / "skill.md"
+    path.write_text("---\nname: Lossless\ngotchas: Frontmatter warning\n---\n\n" + body)
+    skill = parse_skill_file(path)
+    prompt = skill.to_prompt()
+
+    assert body.strip() in prompt
+    for text in ("Unique introduction.", "## Inputs", "## Gotchas", "Unique example.", "Frontmatter warning"):
+        assert prompt.count(text) == 1
+    assert skill.inputs[0]["name"] == "scope"  # Legacy Python access still works.
+    assert skill.steps == ["Inspect the change."]
+    assert str(path.parent) in prompt
+
+
+def test_source_body_preserves_indentation_and_uses_complete_delimiter_lines(tmp_path):
+    body = "    preserve_indented_code()\n\n---\n\n## Constraints\n\nKeep this section.\n"
+    path = tmp_path / "skill.md"
+    path.write_text('---\nname: Delimiters\ndescription: Before --- after\n---\n' + body)
+    skill = parse_skill_file(path)
+
+    assert skill.source_body == body
+    assert body in skill.to_prompt()
+    assert skill.description == "Before --- after"

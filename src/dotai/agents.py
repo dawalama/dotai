@@ -30,6 +30,10 @@ resolution replaces the provisional one and loads file-scoped rules. Do not call
 dotai for casual conversation, simple factual questions, or repeatedly after a
 complete file-aware resolution unless the task or affected files materially change.
 
+The result lists active preference domains that were not loaded. Add
+`--domain <relevant domain>` when one applies, or `--with-prefs <id>` when the user
+requests a specific pack. Active general preferences load by default.
+
 When the user explicitly invokes a dotai workflow such as `/run_review`, load it
 with `{command} context --agent claude --path . --skill run_review`. Treat dotai preferences as soft
 taste only; team rules, security constraints, and user instructions take precedence.

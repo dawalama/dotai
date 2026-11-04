@@ -122,7 +122,7 @@ dotai sync
 
 Local context storage does not, by itself, make an agent load the context. Until an agent adapter is configured, use `dotai primer --path .` to print a compact bootstrap for pasting or piping into your agent.
 
-dotai uses progressive disclosure to keep prompts small. Synced context contains rule summaries and role/skill catalogs. Expand only what a task needs:
+dotai uses progressive disclosure to keep prompts small. Compact primers include complete universal directives, a count of file-scoped rules, and role/skill catalogs. Unrelated scoped rules are not listed individually. Expand what a task needs:
 
 ```bash
 # Expand rules matching the affected files
@@ -136,6 +136,26 @@ dotai context --path . --skill run_review
 ```
 
 Selection is deterministic: file globs, explicit context tags, active preference domains, and named skills or roles. dotai does not guess from semantic similarity. Every expanded item includes the reason it was selected.
+
+`context` and `primer` share the same scoped catalog. Within a Git worktree,
+dotai loads global knowledge and applicable ancestor knowledge directories down
+to the invocation directory, honoring registered custom `ai_dir` paths. Outside
+Git, discovery stops at the nearest registered project, or uses only the supplied
+directory when it is unregistered. Unrelated registered projects are not read.
+Local definitions override inherited items with the same ID; a disabled local
+rule masks the inherited definition. A project's `disabled_rules` list excludes
+global definitions while allowing explicit local replacements.
+
+Affected files are relative to `--path` (absolute paths also work). Project rule
+globs are relative to the directory owning that project's knowledge; global
+globs use the repository or project root. Matching uses logical file paths,
+including symlink names. The host remains responsible for filesystem permissions.
+
+The resolver includes complete universal rule bodies and applicable `rules.md`
+notes. Active `general` preference packs load by default. Other active domains
+are listed without their bodies; select one with `--domain cli`, or load a named
+pack directly with `--with-prefs <id>` regardless of its domain. Explicit packs
+remain subject to scope and enabled state.
 
 ### Automatic delivery with Claude Code
 
@@ -162,11 +182,11 @@ dotai context for substantial development work, after affected files are known,
 and to avoid repeated calls when the task has not changed. Repository and
 organization instructions remain authoritative.
 
-For file-sensitive workflows such as review, debugging, verification, scaffolding,
-maintenance, and release work, a resolution without `--files` is explicitly
+When file-scoped rules exist, or a selected workflow requires files, a resolution without `--files` is explicitly
 marked provisional. Claude must resolve again after discovering the affected
 files. `dotai agent last claude` reports whether the latest resolution is
-`provisional` or `complete`.
+`provisional` or `resolved`, and whether file scope was provided or remains
+unknown. Supplied files do not prove that every affected file was discovered.
 
 The adapter does not modify repositories, install a persistent process, or use
 MCP. Existing personal Claude instructions are preserved. To remove only
@@ -197,7 +217,7 @@ dotai insights --json
 ```
 
 The report shows complete versus provisional resolutions, selection counts,
-last-selected timestamps, universal rule-summary exposure, and enabled items
+last-selected timestamps, universal-rule exposure, and enabled items
 that have never been selected in the current window. Selection proves delivery,
 not compliance: dotai cannot claim that an agent followed an instruction merely
 because it received it.
@@ -562,9 +582,16 @@ Analyze the current branch's diff for issues that tests don't catch.
 4. Generate a structured report with file:line references
 ```
 
+When loading existing dotai skill files, dotai preserves the complete Markdown
+body for execution, including custom sections, nested steps, and code blocks.
+Extracted fields remain available to Python consumers; rendering uses the
+preserved body and identifies the source directory for relative resources.
+Native-format import still uses the existing converter; migration to native
+`SKILL.md` packages and preservation of host-specific metadata are separate work.
+
 ### Gotchas
 
-Skills should document **common failure points** — things that push the agent out of its normal way of thinking. Gotchas are rendered with warning markers in the agent prompt so they get extra attention.
+Skills should document **common failure points** — things that push the agent out of its normal way of thinking. Gotchas in the Markdown body remain verbatim. Frontmatter gotchas and programmatically constructed gotcha fields are rendered with warning markers.
 
 ### Conditional Contexts
 
@@ -684,13 +711,14 @@ dotai toggle no-useeffect --off --project my-legacy-app
 dotai toggle no-useeffect --on
 ```
 
-Synced local context contains a compact bootstrap: universal rule summaries plus preference, role, and skill catalogs. Use `dotai context` to expand relevant material on demand.
+Synced local context contains a compact bootstrap: full universal directives, a scoped-rule count, and preference, role, and skill catalogs. Use `dotai context` to expand relevant material on demand.
 
 ## Agent Sync
 
 `dotai sync` prepares repository-safe local context with:
 
-- **Universal structured rule summaries** (always visible)
+- **Complete universal structured directives** (always visible)
+- **A count and resolver pointer for file-scoped rules**
 - **Pointers to freeform `rules.md` conventions**
 - **Role and skill catalogs** (names, triggers, categories — not full workflows)
 Context is always written outside the worktree. Team instructions take precedence over personal dotai rules and preferences. dotai does not attempt unreliable keyword-based conflict resolution; the generated context tells the agent to ignore conflicting personal guidance and ask when a disagreement is ambiguous.
