@@ -56,6 +56,9 @@ class Role(BaseModel):
         return "\n".join(lines)
 
 
+CATCH_ALL_GLOBS = frozenset({"*", "**", "**/*"})
+
+
 class Rule(BaseModel):
     """A structured coding rule that agents can parse and enforce."""
 
@@ -71,7 +74,8 @@ class Rule(BaseModel):
 
     @property
     def is_universal(self) -> bool:
-        return not self.globs or any(g in {"*", "**", "**/*"} for g in self.globs)
+        """Apply to every task only when no glob narrows the rule."""
+        return not self.globs or all(glob in CATCH_ALL_GLOBS for glob in self.globs)
 
     def to_prompt(self) -> str:
         """Generate the rule prompt for LLM injection."""

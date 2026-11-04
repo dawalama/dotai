@@ -155,12 +155,14 @@ def audit_rules(
     if project_name:
         rules = resolve_rules_for_project(config, project_name)
         if include_disabled:
-            project = config.get_project(project_name)
-            if project:
-                rules = _dedupe_rule_paths(
-                    load_rules_from_dir(config.global_rules_path, "global")
-                    + load_rules_from_dir(project.rules_path, project_name)
-                )
+            from .scope import resolve_scope
+
+            knowledge = resolve_scope(config, project_name)
+            rules = _dedupe_rule_paths([
+                rule
+                for entry in knowledge.directories
+                for rule in load_rules_from_dir(entry.path / "rules", entry.scope)
+            ])
         scope = project_name
     else:
         rules = load_rules_from_dir(config.global_rules_path, "global")

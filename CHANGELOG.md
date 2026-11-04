@@ -23,6 +23,11 @@
   and symlinked file names during matching.
 - Avoid receipt temporary-file collisions and tolerate concurrent history
   pruning at the retention limit.
+- Pluralize the compact primer's file-scoped rule count.
+- Treat a rule as universal only when every glob is a catch-all, so one
+  specific glob keeps the rule file-scoped.
+- Search, `rules`, project audits, scoped insights, and project skill sync
+  read the same ancestor catalog as context. Unrelated projects stay out.
 
 ## 0.6.0 — 2026-07-17
 

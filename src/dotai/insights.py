@@ -144,25 +144,23 @@ def build_insights(
                 if resolved_at >= last_selected.get(key, ""):
                     last_selected[key] = resolved_at
 
-    project_name = next(
-        (
-            project.name
-            for project in config.projects
-            if project_path and project.path.resolve() == project_path.resolve()
-        ),
-        None,
-    )
+    if project_path is not None:
+        from .catalog import load_catalog
 
-    def in_scope(item) -> bool:
-        return not project_name or item.scope in {"global", project_name}
-    known = {
-        "rule": {item.id for item in load_all_rules(config) if item.enabled and in_scope(item)},
-        "preference": {
-            item.id for item in load_all_preferences(config) if item.enabled and in_scope(item)
-        },
-        "role": {item.id for item in load_all_roles(config) if in_scope(item)},
-        "skill": {item.id for item in load_all_skills(config) if in_scope(item)},
-    }
+        catalog = load_catalog(config, project_path=project_path)
+        known = {
+            "rule": {item.id for item in catalog.rules},
+            "preference": {item.id for item in catalog.preferences},
+            "role": {item.id for item in catalog.roles},
+            "skill": {item.id for item in catalog.skills},
+        }
+    else:
+        known = {
+            "rule": {item.id for item in load_all_rules(config) if item.enabled},
+            "preference": {item.id for item in load_all_preferences(config) if item.enabled},
+            "role": {item.id for item in load_all_roles(config)},
+            "skill": {item.id for item in load_all_skills(config)},
+        }
     keys = set(selected) | set(exposed)
     items = [
         ItemInsight(

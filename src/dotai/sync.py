@@ -10,8 +10,6 @@ from typing import Literal
 
 from .models import GlobalConfig, Role, Skill
 from .preferences import format_preferences_section
-from .roles import load_all_roles
-from .skills import load_all_skills
 from .catalog import load_catalog
 from .scope import find_git_root
 
@@ -185,7 +183,11 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 else:
                     scoped_count += 1
             if scoped_count:
-                lines.append(f"{scoped_count} file-scoped rules available via `dotai context --path . --files <paths>`.")
+                scoped_label = "rule" if scoped_count == 1 else "rules"
+                lines.append(
+                    f"{scoped_count} file-scoped {scoped_label} available via "
+                    "`dotai context --path . --files <paths>`."
+                )
             lines.append("")
             lines.append("Resolve affected files before acting so their scoped rules are loaded.")
             lines.append("")
@@ -534,12 +536,10 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     written = []
 
-    # Pre-load roles and skills once for all generators
-    all_roles = load_all_roles(config)
-    all_skills = load_all_skills(config)
-    if project_name:
-        all_roles = [r for r in all_roles if r.scope == project_name or r.scope == "global"]
-        all_skills = [s for s in all_skills if s.scope == project_name or s.scope == "global"]
+    # Same ancestor scope as primer and context, excluding unrelated projects.
+    catalog = load_catalog(config, project_name, project_path)
+    all_roles = catalog.roles
+    all_skills = catalog.skills
 
     if "claude" in agents:
         claude_path = project_path / "CLAUDE.md"

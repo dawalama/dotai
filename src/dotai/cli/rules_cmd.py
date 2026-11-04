@@ -270,14 +270,19 @@ def rules(
     all: bool = typer.Option(False, "--all", "-a", help="Show all rules including disabled"),
     check: bool = typer.Option(False, "--check", help="Scan for duplicates, empty bodies, weak descriptions"),
 ):
-    """List rules. Shows resolved active rules by default.
+    """List rules. Shows the active rules for this directory by default.
 
-    Use --check to audit rule quality (duplicates, empty bodies).
+    Use --project to resolve a registered project, or --all for every rule in
+    the library. Use --check to audit rule quality (duplicates, empty bodies).
     """
+    from ..catalog import load_catalog
     from ..store import load_config
     from ..rules import load_all_rules, resolve_rules_for_project, check_rule_quality
 
     config = load_config()
+    if project and not config.get_project(project):
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(2)
 
     if check:
         findings = check_rule_quality(config)
@@ -303,7 +308,7 @@ def rules(
     elif project:
         rule_list = resolve_rules_for_project(config, project)
     else:
-        rule_list = load_all_rules(config)
+        rule_list = load_catalog(config, project_path=Path.cwd()).rules
 
     if not rule_list:
         console.print("[dim]No rules found. Use `dotai learn` to add rules.[/dim]")

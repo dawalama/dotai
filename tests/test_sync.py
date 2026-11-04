@@ -170,6 +170,22 @@ class TestSyncProject:
         sync_project(project_dir, config, agents=["claude"])
         assert not (project_dir / ".claude" / "skills" / "run_test").exists()
 
+    def test_project_sync_skips_unrelated_project_skills(self, ai_dir, project_dir, sample_skill_file):
+        other = project_dir.parent / "other"
+        (other / ".ai" / "skills").mkdir(parents=True)
+        (other / ".ai" / "skills" / "foreign.md").write_text(
+            "---\nname: Foreign\ntrigger: /run_foreign\n---\nDo not install this.\n"
+        )
+        config = GlobalConfig(global_ai_dir=ai_dir, projects=[
+            ProjectConfig(name="repo", path=project_dir),
+            ProjectConfig(name="other", path=other),
+        ])
+
+        sync_project(project_dir, config, "repo", agents=["claude"])
+
+        assert (project_dir / ".claude" / "skills" / "run_test" / "SKILL.md").exists()
+        assert not (project_dir / ".claude" / "skills" / "run_foreign").exists()
+
 
 class TestLocalSync:
     def test_git_repo_defaults_to_local(self, tmp_path, monkeypatch):
@@ -199,7 +215,7 @@ class TestLocalSync:
         assert "Team Instructions (CLAUDE.md) — Authoritative" in context
         assert "Use the team formatter." in context
         assert "Personal dotai Context — Supplemental" in context
-        assert "1 file-scoped rules available" in context
+        assert "1 file-scoped rule available" in context
         assert "no-console-log" not in context
         assert "Remove all `console.log` statements" not in context
         assert str(plan.target_path / "manifest.json") in written

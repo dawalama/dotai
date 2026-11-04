@@ -122,19 +122,21 @@ def search(
     query: str = typer.Argument("", help="Search keyword (optional if using --tag)"),
     type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by rule, preference, role, or skill"),
     tag: Optional[str] = typer.Option(None, "--tag", help="Filter by tag"),
+    path: str = typer.Option(".", "--path", help="Search the knowledge that applies to this directory"),
 ):
-    """Search live dotai knowledge by keyword, type, or tag.
+    """Search the knowledge that applies to a directory.
+
+    Uses the same ancestor catalog as context and primer. Unrelated registered
+    projects are not read. Active preference packs are included; inactive packs
+    stay out.
 
     Examples:
       dotai search "useEffect"
       dotai search "review" --type skill
       dotai search --tag security
-      dotai search "auth" --type rule --tag react
+      dotai search "auth" --type rule --tag react --path .
     """
-    from ..preferences import load_all_preferences
-    from ..roles import load_all_roles
-    from ..rules import load_all_rules
-    from ..skills import load_all_skills
+    from ..catalog import load_catalog
     from ..store import load_config
 
     valid_types = {"rule", "preference", "role", "skill"}
@@ -145,11 +147,16 @@ def search(
         raise typer.Exit(1)
 
     config = load_config()
+    try:
+        catalog = load_catalog(config, project_path=Path(path).expanduser().resolve())
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from error
     items = []
-    items.extend(("rule", item.id, item.description, item.tags, item.file_path) for item in load_all_rules(config))
-    items.extend(("preference", item.id, item.description, item.tags, item.file_path) for item in load_all_preferences(config))
-    items.extend(("role", item.id, item.description, item.tags, item.file_path) for item in load_all_roles(config))
-    items.extend(("skill", item.id, item.description, item.tags, item.file_path) for item in load_all_skills(config))
+    items.extend(("rule", item.id, item.description, item.tags, item.file_path) for item in catalog.rules)
+    items.extend(("preference", item.id, item.description, item.tags, item.file_path) for item in catalog.preferences)
+    items.extend(("role", item.id, item.description, item.tags, item.file_path) for item in catalog.roles)
+    items.extend(("skill", item.id, item.description, item.tags, item.file_path) for item in catalog.skills)
 
     query_lower = query.strip().lower()
     tag_lower = tag.strip().lower() if tag else None

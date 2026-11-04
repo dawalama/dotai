@@ -11,7 +11,7 @@ from dotai.cli import app
 from dotai.context import resolve_context
 from dotai.models import GlobalConfig, ProjectConfig
 from dotai.preferences import create_preference_pack, save_active_pack_ids
-from dotai.rules import format_rule_markdown
+from dotai.rules import format_rule_markdown, resolve_rules_for_project
 from dotai.sync import generate_primer
 
 
@@ -234,3 +234,55 @@ def test_scoped_globs_match_logical_symlink_paths(ai_dir, tmp_path):
     (repo / "linked.py").symlink_to(outside)
     resolved = resolve_context(GlobalConfig(global_ai_dir=ai_dir), repo, files=["./linked.py"])
     assert [r.id for r in resolved.rules] == ["shared"]
+
+
+def test_specific_glob_keeps_a_mixed_rule_file_scoped(ai_dir, config, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (ai_dir / "rules" / "mixed.md").write_text(format_rule_markdown(
+        "Mixed", "Scoped plus catch-all", "MIXED BODY", globs=["*.py", "*"],
+    ))
+
+    primer = generate_primer(config, project_path=repo, compact=True)
+    missed = resolve_context(config, repo, files=["README.md"])
+    hit = resolve_context(config, repo, files=["src/app.py"])
+
+    assert "MIXED BODY" not in primer
+    assert "1 file-scoped rule available" in primer
+    assert missed.rules == []
+    assert [rule.id for rule in hit.rules] == ["mixed"]
+
+
+def test_search_and_rule_listing_follow_the_scoped_catalog(ai_dir, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    child = repo / "packages" / "api"
+    child.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    write_rule(repo / "judgment", "PARENT DIRECTIVE")
+    other = tmp_path / "other"
+    (other / ".ai" / "rules").mkdir(parents=True)
+    (other / ".ai" / "rules" / "foreign.md").write_bytes(b"\xff")
+    config = GlobalConfig(global_ai_dir=ai_dir, projects=[
+        ProjectConfig(name="root", path=repo, ai_dir=Path("judgment")),
+        ProjectConfig(name="api", path=child),
+        ProjectConfig(name="other", path=other),
+    ])
+    monkeypatch.setattr("dotai.store.load_config", lambda: config)
+
+    assert [rule.body for rule in resolve_rules_for_project(config, "api")] == ["PARENT DIRECTIVE"]
+
+    runner = CliRunner()
+    found = runner.invoke(app, ["search", "shared", "--path", str(child), "--type", "rule"])
+    assert found.exit_code == 0, found.output
+    assert "shared" in found.output
+    assert "foreign" not in found.output
+
+    monkeypatch.chdir(child)
+    listed = runner.invoke(app, ["rules"])
+    assert listed.exit_code == 0, listed.output
+    assert "shared" in listed.output
+    named = runner.invoke(app, ["rules", "--project", "api"])
+    assert named.exit_code == 0, named.output
+    assert "shared" in named.output
+    missing = runner.invoke(app, ["rules", "--project", "missing"])
+    assert missing.exit_code == 2

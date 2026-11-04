@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import (
+    CATCH_ALL_GLOBS,
     GlobalConfig,
     PreferencePack,
     Role,
@@ -267,7 +268,7 @@ def _matches_file(
             except ValueError:
                 continue  # This path lies outside the rule's owning scope.
         for pattern in rule.globs:
-            if pattern in {"*", "**", "**/*"}:
+            if pattern in CATCH_ALL_GLOBS:
                 continue
             if fnmatch.fnmatch(normalized, pattern) or fnmatch.fnmatch(Path(normalized).name, pattern):
                 return f"file `{filename}` matches `{pattern}`"

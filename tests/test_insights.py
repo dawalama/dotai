@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from dotai.cli import app
 from dotai.context import resolve_context, save_resolution_receipt
 from dotai.insights import build_insights, load_receipt_history
+from dotai.models import GlobalConfig, ProjectConfig
 
 
 def test_insights_aggregate_selection_and_exposure(
@@ -67,6 +68,25 @@ def test_insights_json_command(ai_dir, config, sample_rule_file, monkeypatch):
     payload = json.loads(result.output)
     assert payload["resolutions"] == 1
     assert payload["items"][0]["kind"] == "rule"
+
+
+def test_scoped_insights_ignore_unrelated_projects(ai_dir, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    other = tmp_path / "other"
+    (other / ".ai" / "rules").mkdir(parents=True)
+    (other / ".ai" / "rules" / "foreign.md").write_text(
+        "---\nname: Foreign\ndescription: Elsewhere\n---\n"
+        "This unrelated rule must stay out of scoped insights.\n"
+    )
+    config = GlobalConfig(global_ai_dir=ai_dir, projects=[
+        ProjectConfig(name="repo", path=repo),
+        ProjectConfig(name="other", path=other),
+    ])
+
+    report = build_insights(config, tmp_path / "receipts", project_path=repo)
+
+    assert "foreign" not in report.unused["rule"]
 
 
 def test_history_rejects_unsafe_agent_id(ai_dir):

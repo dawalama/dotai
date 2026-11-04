@@ -440,6 +440,10 @@ Hard rules always take precedence if they conflict.
 
 ### Searching your knowledge
 
+Search reads the same scoped catalog as `dotai context`. From a project, it
+includes global knowledge and applicable ancestor directories, and it skips
+unrelated registered projects. Pass `--path` to search another directory.
+
 ```bash
 # Search by keyword
 dotai search "useEffect"
@@ -855,7 +859,7 @@ dotai install <source> [-s skill]      # Install skills from git repo or local p
 dotai install --update [-s skill] [--skip-vet]  # Vetted refresh from recorded sources
 dotai remove <skill> [-p project]     # Remove an installed skill
 dotai new-skill <name> [-t trigger]    # Create a new skill from template
-dotai search "query" [--type t] [--tag] # Search live knowledge
+dotai search "query" [--type t] [--tag] [--path .] # Search knowledge for a directory
 ```
 
 ## Philosophy

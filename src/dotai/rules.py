@@ -106,27 +106,13 @@ def load_all_rules(config: GlobalConfig) -> list[Rule]:
 def resolve_rules_for_project(config: GlobalConfig, project_name: str | None = None) -> list[Rule]:
     """Resolve the active rule set for a project.
 
-    - Includes all enabled global rules, minus any the project has disabled
-    - Includes all enabled project-specific rules
-    - Respects the `enabled` field in each rule's frontmatter
+    Uses the same ancestor catalog as context and primer: global rules,
+    applicable ancestor directories, custom knowledge paths, and disabled
+    overrides. Unrelated registered projects are excluded.
     """
-    global_rules = load_rules_from_dir(config.global_rules_path, "global")
+    from .catalog import load_catalog
 
-    # Get project-level disabled list
-    disabled_ids: set[str] = set()
-    project_rules: list[Rule] = []
-
-    if project_name:
-        proj = config.get_project(project_name)
-        if proj:
-            disabled_ids = set(proj.disabled_rules)
-            project_rules = load_rules_from_dir(proj.rules_path, project_name)
-
-    # Filter: enabled globally + not disabled by project
-    active = [r for r in global_rules if r.enabled and r.id not in disabled_ids]
-    active.extend(r for r in project_rules if r.enabled)
-
-    return active
+    return load_catalog(config, project_name).rules
 
 
 def toggle_rule_global(rule_id: str, rules_dir: Path, enabled: bool) -> bool:
