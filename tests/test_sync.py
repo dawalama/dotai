@@ -11,6 +11,7 @@ from dotai.sync import (
     DOTAI_MARKER_END,
     DOTAI_MARKER_START,
     _merge_with_markers,
+    _replace_legacy_ai_context,
     generate_claude_skill_md,
     generate_primer,
     find_git_root,
@@ -185,6 +186,123 @@ class TestSyncProject:
 
         assert (project_dir / ".claude" / "skills" / "run_test" / "SKILL.md").exists()
         assert not (project_dir / ".claude" / "skills" / "run_foreign").exists()
+
+    def test_user_headings_are_not_truncated(self, ai_dir, project_dir, config):
+        claude = project_dir / "CLAUDE.md"
+        claude.write_text(
+            "# Team\n\nUse the formatter.\n\n"
+            "## AI Context\n\nUser notes under this heading.\n\n"
+            "# AI Contextual notes\n\nKeep this longer heading.\n\n"
+            "See the # AI Context section for background.\n\n"
+            "## Notes on AI Context\n\nAlso keep this.\n\n"
+            "# Deploy\n\nShip on Tuesdays.\n"
+        )
+
+        sync_project(project_dir, config, agents=["claude"])
+        result = claude.read_text()
+
+        assert "Use the formatter." in result
+        assert "## AI Context" in result
+        assert "User notes under this heading." in result
+        assert "Keep this longer heading." in result
+        assert "See the # AI Context section for background." in result
+        assert "## Notes on AI Context" in result
+        assert "Also keep this." in result
+        assert "Ship on Tuesdays." in result
+        assert result.index("Ship on Tuesdays.") < result.index(DOTAI_MARKER_START)
+
+    def test_own_ai_context_section_is_kept(self, ai_dir, project_dir, config):
+        claude = project_dir / "CLAUDE.md"
+        claude.write_text(
+            "# Guide\n\n# AI Context\n\nThese are my own notes.\n\n"
+            "# Later\n\nStill mine.\n"
+        )
+
+        sync_project(project_dir, config, agents=["claude"])
+        result = claude.read_text()
+
+        assert "These are my own notes." in result
+        assert "Still mine." in result
+        assert result.index("Still mine.") < result.index(DOTAI_MARKER_START)
+
+    def test_legacy_block_keeps_surrounding_sections(self, ai_dir, project_dir, config):
+        claude = project_dir / "CLAUDE.md"
+        claude.write_text(
+            "# Team rules\n\nUSER_BEFORE\n\n"
+            "# AI Context\n\n"
+            "# AI Knowledge Base (~/.ai/)\n\n"
+            "LEGACY_BODY_SENTINEL\n\n"
+            "Read `~/.ai/rules.md` and structured rules at the start of every conversation.\n\n"
+            "# After\n\nUSER_AFTER\n"
+        )
+
+        sync_project(project_dir, config, agents=["claude"])
+        result = claude.read_text()
+
+        assert "USER_BEFORE" in result
+        assert "USER_AFTER" in result
+        assert "LEGACY_BODY_SENTINEL" not in result
+        assert result.count(DOTAI_MARKER_START) == 1
+        assert result.index("USER_BEFORE") < result.index(DOTAI_MARKER_START)
+        assert result.index(DOTAI_MARKER_END) < result.index("USER_AFTER")
+
+        sync_project(project_dir, config, agents=["claude"])
+        resynced = claude.read_text()
+        assert "USER_BEFORE" in resynced
+        assert "USER_AFTER" in resynced
+        assert resynced.count(DOTAI_MARKER_START) == 1
+
+    def test_legacy_block_with_extra_heading_is_kept(self, ai_dir, project_dir, config):
+        claude = project_dir / "CLAUDE.md"
+        claude.write_text(
+            "# AI Context\n\n"
+            "# AI Knowledge Base (~/.ai/)\n\n"
+            "# Custom\n\nCUSTOM_SECTION\n\n"
+            "Read `~/.ai/rules.md` and structured rules at the start of every conversation.\n"
+        )
+
+        sync_project(project_dir, config, agents=["claude"])
+        result = claude.read_text()
+
+        assert "CUSTOM_SECTION" in result
+        assert result.index("CUSTOM_SECTION") < result.index(DOTAI_MARKER_START)
+
+
+class TestLegacyAiContext:
+    def test_original_closing_sentence_bounds_the_block(self):
+        existing = (
+            "Preamble\n\n"
+            "# AI Context\n\n"
+            "# AI Knowledge Base (~/.ai/)\n\n"
+            "OLD_PRIMER\n\n"
+            "Read `~/.ai/rules.md` at the start of every conversation.\n\n"
+            "Notes added later.\n"
+        )
+        result = _replace_legacy_ai_context(existing, "NEW_SECTION")
+        assert result is not None
+        assert "Preamble" in result
+        assert "Notes added later." in result
+        assert "OLD_PRIMER" not in result
+        assert "NEW_SECTION" in result
+
+    def test_user_heading_before_a_real_legacy_block_stays(self):
+        existing = (
+            "# AI Context\n\nMy own section.\n\n"
+            "# AI Context\n\n"
+            "# AI Knowledge Base (~/.ai/)\n\n"
+            "OLD_PRIMER\n\n"
+            "Read `~/.ai/rules.md` and structured rules at the start of every conversation.\n\n"
+            "After the generated block.\n"
+        )
+        result = _replace_legacy_ai_context(existing, "NEW_SECTION")
+        assert result is not None
+        assert "My own section." in result
+        assert "After the generated block." in result
+        assert "OLD_PRIMER" not in result
+
+    def test_substring_is_not_a_legacy_block(self):
+        existing = "## AI Context\n\nKeep me.\n"
+        assert _replace_legacy_ai_context(existing, "NEW_SECTION") is None
 
 
 class TestLocalSync:

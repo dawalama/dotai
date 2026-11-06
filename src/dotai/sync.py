@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -493,6 +494,18 @@ def sync_claude_skills(project_path: Path, skills: list[Skill],
 DOTAI_MARKER_START = "<!-- dotai:start -->"
 DOTAI_MARKER_END = "<!-- dotai:end -->"
 
+# The pre-marker generator opened with this line and closed with one of these
+# sentences. Anything short of that whole span is user text.
+_LEGACY_AI_CONTEXT_HEADING = re.compile(r"^# AI Context[ \t]*\r?$", re.MULTILINE)
+_LEGACY_PRIMER_HEADING = re.compile(
+    r"^# AI Knowledge Base(?: \(~/\.ai/\))?[ \t]*\r?$",
+    re.MULTILINE,
+)
+_LEGACY_CLOSINGS = (
+    "Read `~/.ai/rules.md` and structured rules at the start of every conversation.",
+    "Read `~/.ai/rules.md` at the start of every conversation.",
+)
+
 
 def _merge_with_markers(existing: str, generated: str) -> str:
     """Replace only the dotai-managed section, preserving everything else."""
@@ -509,6 +522,41 @@ def _merge_with_markers(existing: str, generated: str) -> str:
         return existing.rstrip() + "\n\n" + block + "\n"
 
 
+def _replace_legacy_ai_context(existing: str, section: str) -> str | None:
+    """Replace one bounded legacy generated block. Return None when that is unsafe.
+
+    The old generator opened its managed section with a line that was exactly
+    `# AI Context` and closed it with a fixed sentence. Only that span is
+    replaced. A different heading, a longer title, or those words inside a
+    sentence stay put, and so does every line after the closing sentence.
+    """
+    block = f"{DOTAI_MARKER_START}\n{section.strip()}\n{DOTAI_MARKER_END}"
+    for heading in _LEGACY_AI_CONTEXT_HEADING.finditer(existing):
+        tail = existing[heading.end():]
+        primer = _LEGACY_PRIMER_HEADING.search(tail)
+        if primer is None or tail[: primer.start()].strip():
+            continue
+        end_at: int | None = None
+        end_len = 0
+        for closing in _LEGACY_CLOSINGS:
+            idx = tail.find(closing, primer.end())
+            if idx != -1 and (end_at is None or idx < end_at):
+                end_at = idx
+                end_len = len(closing)
+        if end_at is None:
+            continue
+        if any(
+            line.startswith("# ") and _LEGACY_PRIMER_HEADING.fullmatch(line) is None
+            for line in tail[:end_at].splitlines()
+        ):
+            continue
+        before = existing[: heading.start()].rstrip()
+        after = tail[end_at + end_len :].strip()
+        pieces = [piece for piece in (before, block, after) if piece]
+        return "\n\n".join(pieces) + "\n"
+    return None
+
+
 def sync_project(project_path: Path, config: GlobalConfig, project_name: str | None = None,
                  agents: list[str] | None = None, full: bool = False,
                  extra_prefs: list[str] | None = None) -> list[str]:
@@ -516,7 +564,9 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
     Preserves any existing local content in the target files. dotai-managed
     content is wrapped in marker comments so re-syncing replaces only the
-    managed section.
+    managed section. A legacy `# AI Context` section is replaced only when it
+    is a whole line followed by the old primer and a closing sentence this
+    generator wrote. Other uses of that heading are preserved.
 
     Args:
         project_path: Where to write the files
@@ -549,12 +599,13 @@ def sync_project(project_path: Path, config: GlobalConfig, project_name: str | N
 
         if claude_path.exists():
             existing = claude_path.read_text()
-            # Migrate old-style marker to new markers
-            if "# AI Context" in existing and DOTAI_MARKER_START not in existing:
-                before = existing.split("# AI Context")[0].rstrip()
-                claude_path.write_text(before + "\n\n" + DOTAI_MARKER_START + "\n" + section.strip() + "\n" + DOTAI_MARKER_END + "\n")
-            else:
+            migrated = None
+            if DOTAI_MARKER_START not in existing:
+                migrated = _replace_legacy_ai_context(existing, section)
+            if migrated is None:
                 claude_path.write_text(_merge_with_markers(existing, section))
+            else:
+                claude_path.write_text(migrated)
         else:
             claude_path.write_text(DOTAI_MARKER_START + "\n" + section.strip() + "\n" + DOTAI_MARKER_END + "\n")
         written.append(str(claude_path))

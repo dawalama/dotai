@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-11-06
+
+### Fixed
+
+- `sync_project` no longer deletes `CLAUDE.md` content after a `# AI Context`
+  substring. A legacy generated block is replaced only when the heading is a
+  whole line, the next content is the old primer, and the block ends at a
+  closing sentence dotai used to write. Text outside that span stays. Any other
+  heading is left in place and the managed block is appended.
+
 ## 0.7.0 — 2026-11-04
 
 ### Changed
