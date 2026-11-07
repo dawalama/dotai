@@ -390,7 +390,11 @@ class TestSyncErrors:
             ),
         )
 
-        result = CliRunner(mix_stderr=False).invoke(
+        try:
+            runner = CliRunner(mix_stderr=False)
+        except TypeError:
+            runner = CliRunner()
+        result = runner.invoke(
             app,
             ["context", "--path", str(ai_dir.parent), "--agent", "claude"],
         )
