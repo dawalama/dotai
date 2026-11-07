@@ -197,3 +197,37 @@ def test_source_body_preserves_indentation_and_uses_complete_delimiter_lines(tmp
     assert skill.source_body == body
     assert body in skill.to_prompt()
     assert skill.description == "Before --- after"
+
+
+def test_native_skill_md_package(tmp_path):
+    skill_dir = tmp_path / "skills" / "native-deploy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: Native Deploy\ndescription: Native package\n---\n\n## Instructions\n\nRun deploy pipeline.\n"
+    )
+    (skill_dir / ".dotai-metadata.json").write_text(
+        json.dumps({"category": "deployment", "trigger": "/run_native_deploy"})
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "deploy.sh").write_text("#!/bin/bash\necho deploy")
+
+    skills = load_skills_from_dir(tmp_path / "skills")
+    assert len(skills) == 1
+    skill = skills[0]
+    assert skill.name == "Native Deploy"
+    assert skill.is_folder_skill is True
+    assert skill.category == SkillCategory.DEPLOYMENT
+    assert skill.trigger == "/run_native_deploy"
+    assert len(skill.scripts) == 1
+    assert "Run deploy pipeline." in skill.to_prompt()
+
+
+def test_create_skill_template_folder_creates_skill_md():
+    from dotai.skills import create_skill_template
+
+    template = create_skill_template("Deploy", folder=True)
+    assert isinstance(template, dict)
+    assert "SKILL.md" in template
+    assert "main.md" not in template
+    assert "name: Deploy" in template["SKILL.md"]

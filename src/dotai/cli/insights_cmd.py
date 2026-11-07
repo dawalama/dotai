@@ -81,5 +81,5 @@ def insights(
             suffix = f" (+{len(ids) - 8} more)" if len(ids) > 8 else ""
             console.print(f"  {kind}: {preview}{suffix}")
     console.print(
-        "\n[dim]Selection is evidence of delivery, not proof that the agent followed the instruction.[/dim]"
+        "\n[dim]Selection is evidence of delivery, not proof of compliance or causality. Rare safety or compliance guidance may remain critical even when seldom selected.[/dim]"
     )

@@ -61,7 +61,7 @@ def primer(
 @app.command("context")
 def resolve_task_context(
     path: str = typer.Option(".", "--path", help="Project path used for scoped context"),
-    task: str = typer.Option("", "--task", help="Current task; routes only unambiguous skill aliases"),
+    task: str = typer.Option("", "--task", help="Current task description for context resolution"),
     files: Optional[str] = typer.Option(None, "--files", help="Comma-separated affected file paths"),
     contexts: Optional[str] = typer.Option(None, "--context", help="Comma-separated explicit contexts/tags"),
     domains: Optional[str] = typer.Option(None, "--domain", help="Comma-separated active preference domains to load"),

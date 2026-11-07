@@ -283,14 +283,11 @@ def _infer_category(name: str, description: str) -> SkillCategory:
 
 def convert_claude_to_dotai(source: Path, dest_dir: Path,
                             skill_name: str | None = None) -> Path:
-    """Convert a Claude-native SKILL.md to dotai format.
+    """Store Claude/native skill package into destination losslessly.
 
-    Args:
-        source: Path to SKILL.md file or directory containing it
-        dest_dir: Destination directory for the converted skill
-        skill_name: Override skill name (derived from frontmatter if not given)
-
-    Returns: Path to the created skill file/directory
+    Adopts native SKILL.md packages as canonical. Keeps package bodies,
+    metadata, scripts, references, assets, and relative paths intact.
+    Does not use lossy reconstruction of body sections.
     """
     parsed = parse_claude_skill_md(source)
     fm = parsed["frontmatter"]
@@ -300,11 +297,6 @@ def convert_claude_to_dotai(source: Path, dest_dir: Path,
     skill_id = generate_id(name)
     description = fm.get("description", "")
 
-    # Detect structure in body
-    detected = _detect_structure_in_body(body)
-    if not description:
-        description = detected["description"]
-
     # Map Claude-native fields to dotai
     tags: list[str] = []
     if "compatibility" in fm:
@@ -312,74 +304,39 @@ def convert_claude_to_dotai(source: Path, dest_dir: Path,
     if "tags" in fm:
         tags.extend(t.strip() for t in fm["tags"].split(",") if t.strip())
 
-    # Infer category from name + description
     category = _infer_category(name, description)
 
-    # Build frontmatter
-    dotai_fm_lines = [
+    fm_lines = [
         f"name: {name}",
         f"trigger: /run_{skill_id}",
         f"category: {category.value}",
     ]
     if tags:
-        dotai_fm_lines.append(f"tags: {', '.join(tags)}")
+        fm_lines.append(f"tags: {', '.join(tags)}")
     if "license" in fm:
-        dotai_fm_lines.append(f"# license: {fm['license']}")
+        fm_lines.append(f"# license: {fm['license']}")
+    for k, v in fm.items():
+        if k.lower() not in {"name", "trigger", "category", "tags", "compatibility", "license"}:
+            fm_lines.append(f"{k}: {v}")
 
-    dotai_frontmatter = "\n".join(dotai_fm_lines)
+    dotai_frontmatter = "\n".join(fm_lines)
+    # Lossless body: keep entire original body intact without section slicing
+    dotai_body = body.strip()
 
-    # Build body
-    is_folder_skill = parsed["has_scripts"] or parsed["has_references"] or parsed["has_assets"]
-
-    if detected["is_structured"]:
-        # Write structured dotai format
-        body_parts = [description, ""]
-
-        if detected["inputs"]:
-            body_parts.append("## Inputs")
-            body_parts.append("")
-            for inp in detected["inputs"]:
-                req = "(required)" if inp.get("required") else "(optional)"
-                body_parts.append(f"- `{inp['name']}` {req}: {inp['description']}")
-            body_parts.append("")
-
-        if detected["gotchas"]:
-            body_parts.append("## Gotchas")
-            body_parts.append("")
-            for g in detected["gotchas"]:
-                body_parts.append(f"- {g}")
-            body_parts.append("")
-
-        if detected["steps"]:
-            body_parts.append("## Steps")
-            body_parts.append("")
-            for i, step in enumerate(detected["steps"], 1):
-                body_parts.append(f"{i}. {step}")
-            body_parts.append("")
-
-        if detected["examples"]:
-            body_parts.append("## Examples")
-            body_parts.append("")
-            for ex in detected["examples"]:
-                body_parts.append(f"- {ex}")
-            body_parts.append("")
-
-        dotai_body = "\n".join(body_parts)
-    else:
-        # Free-form: keep as runbook
-        dotai_body = f"{description}\n\n{body}" if description else body
-
-    content = f"---\n{dotai_frontmatter}\n---\n\n{dotai_body.strip()}\n"
+    content = f"---\n{dotai_frontmatter}\n---\n\n{dotai_body}\n"
 
     dest_dir.mkdir(parents=True, exist_ok=True)
+    is_folder_skill = parsed["has_scripts"] or parsed["has_references"] or parsed["has_assets"]
 
     if is_folder_skill:
-        # Create folder-based skill
         skill_dir = dest_dir / skill_id
-        skill_dir.mkdir(exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        # Canonical SKILL.md
+        (skill_dir / "SKILL.md").write_text(content)
+        # Compatibility main.md
         (skill_dir / "main.md").write_text(content)
 
-        # Copy companion directories
+        # Copy companion directories intact
         for dirname in ("scripts", "references", "assets"):
             src_sub = parsed["base_dir"] / dirname
             if src_sub.is_dir():
@@ -388,9 +345,17 @@ def convert_claude_to_dotai(source: Path, dest_dir: Path,
                     shutil.rmtree(dest_sub)
                 shutil.copytree(src_sub, dest_sub)
 
+        # Store dotai-specific metadata separately
+        dotai_meta = {
+            "name": name,
+            "id": skill_id,
+            "category": category.value,
+            "trigger": f"/run_{skill_id}",
+        }
+        (skill_dir / ".dotai-metadata.json").write_text(json.dumps(dotai_meta, indent=2) + "\n")
+
         return skill_dir
     else:
-        # Single-file skill
         dest_file = dest_dir / f"{skill_id}.md"
         dest_file.write_text(content)
         return dest_file

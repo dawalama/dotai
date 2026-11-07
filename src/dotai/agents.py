@@ -15,28 +15,31 @@ ADAPTER_MARKER_END = "<!-- dotai:agent:claude:end -->"
 
 CLAUDE_BOOTSTRAP = """# dotai Personal Context
 
-Repository and organization instructions are authoritative. dotai is personal,
-supplemental guidance and must never override team instructions.
+Repository and organization instructions are authoritative. dotai provides
+personal, supplemental developer guidance and soft preferences. It does not
+override team instructions, and prompt guidance does not enforce security boundaries.
 
-For substantial coding, debugging, review, planning, verification, or release
-work, run this before acting:
+When beginning substantive coding, architectural, or review work on a repository
+where personal guidance may apply, run:
 
-`{command} context --agent claude --path . --task "<concise task>" --files "<comma-separated affected files>"`
+`{command} context --agent claude --path . --task "<concise task>"`
 
-If affected files are not known yet, omit `--files` only for an initial,
-provisional resolution. Discover the relevant files, then you MUST run dotai again
-with `--files` before substantive review, editing, or implementation. The second
-resolution replaces the provisional one and loads file-scoped rules. Do not call
-dotai for casual conversation, simple factual questions, or repeatedly after a
-complete file-aware resolution unless the task or affected files materially change.
+Include `--files "<comma-separated affected files>"` if affected files are already known.
+If affected files are not known yet, omit `--files` for an initial resolution.
+If dotai reports that file-scoped rules apply (`Provisional Resolution — Files Required`),
+discover the relevant files, then you MUST run dotai again with `--files` before
+substantive review, editing, or implementation. The second resolution loads file-scoped
+rules. Do not call dotai repeatedly if no file-scoped rules apply, for casual conversation,
+simple factual questions, or after a complete file-aware resolution unless the task or
+affected files materially change.
 
 The result lists active preference domains that were not loaded. Add
 `--domain <relevant domain>` when one applies, or `--with-prefs <id>` when the user
 requests a specific pack. Active general preferences load by default.
 
-When the user explicitly invokes a dotai workflow such as `/run_review`, load it
-with `{command} context --agent claude --path . --skill run_review`. Treat dotai preferences as soft
-taste only; team rules, security constraints, and user instructions take precedence.
+When the user explicitly invokes a dotai skill, load it with
+`{command} context --agent claude --path . --skill <skill_name>`. Treat dotai preferences as soft
+taste only; team rules and host controls take precedence.
 """
 
 

@@ -137,8 +137,7 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         "  rules.md          # Freeform conventions and notes",
         "  rules/            # Structured rules (individual files) — HARD constraints",
         "  preferences/      # Soft taste packs (borrowable style priors)",
-        "  roles/            # Cognitive modes (personas for different tasks)",
-        "  skills/           # Reusable workflows (slash commands)",
+        "  skills/           # Native SKILL.md packages and workflows",
         "  tools/            # Python tool implementations",
         "```",
         "",
@@ -207,9 +206,9 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         lines.append(pref_section)
         lines.append("")
 
-    # Roles — catalog by default; full personas only with full=True
+    # Roles — transitional catalog for legacy un-migrated roles
     if project_roles:
-        lines.append("## Available Roles")
+        lines.append("## Available Roles (Transitional)")
         lines.append("")
         for role in project_roles:
             scope_tag = f" [{role.scope}]" if role.scope != "global" else ""
@@ -231,8 +230,8 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
                 lines.append("")
         else:
             lines.append(
-                "To adopt a role, read its file from `~/.ai/roles/` (or project `.ai/roles/`) "
-                "and follow its persona. Use `dotai context --role <name>` to resolve it."
+                "Roles are transitional; run `dotai migrate` to migrate existing roles to user-authored skills. "
+                "Use `dotai context --role <name>` to resolve a legacy role explicitly."
             )
             lines.append("")
 
@@ -296,26 +295,6 @@ def generate_primer(config: GlobalConfig, project_name: str | None = None,
         "5. **When unsure**: Structured rules > freeform notes > preference packs; project overrides global",
         "",
     ])
-
-    if not compact or full:
-        lines.extend([
-            "## Composing Skills with Roles",
-            "",
-            "When the user writes `/<skill> as <role>`, adopt that role's full persona",
-            "before executing the skill's steps. The role shapes *how* you think;",
-            "the skill defines *what* you do.",
-            "",
-            "Examples:",
-            "- `/run_review as qa` — run the Code Review skill while thinking like a QA Engineer",
-            "- `/run_review as paranoid-reviewer` — review code as a paranoid staff engineer focused on security",
-            "- `/run_techdebt as debugger` — hunt tech debt with a debugger's systematic mindset",
-            "- `/run_review` (no role) — run the skill with its default role, or no persona if none is set",
-            "",
-            "To compose: find the matching role from **Available Roles** above,",
-            "adopt its persona and principles, then execute the skill's steps.",
-            "The role's anti-patterns become things to watch for during execution.",
-            "",
-        ])
 
     return "\n".join(lines)
 

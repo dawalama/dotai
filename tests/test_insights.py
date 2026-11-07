@@ -21,6 +21,7 @@ def test_insights_aggregate_selection_and_exposure(
         task="Review the changes",
         files=["src/app.ts"],
         skill_id="run_test",
+        role_id="test-reviewer",
     )
     second = resolve_context(config, ai_dir.parent, task="Explain the project")
     save_resolution_receipt(first, "claude", receipts_dir)

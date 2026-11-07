@@ -51,7 +51,7 @@ def parse_rule_file(file_path: Path, scope: str = "global") -> Rule | None:
     name = frontmatter.get("name", file_path.stem.replace("-", " ").replace("_", " ").title())
     description = frontmatter.get("description", "")
     tags = [t.strip() for t in frontmatter.get("tags", "").split(",") if t.strip()]
-    globs = [g.strip() for g in frontmatter.get("globs", "").split(",") if g.strip()]
+    globs = [g.strip().strip("'\"") for g in frontmatter.get("globs", "").split(",") if g.strip()]
     enabled = frontmatter.get("enabled", "true").lower() not in ("false", "no", "0")
 
     if not description:

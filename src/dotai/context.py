@@ -292,27 +292,6 @@ def _find(items: list, requested: str | None, kind: str):
     raise ValueError(f"Unknown {kind}: {requested}")
 
 
-def _route_skill(skills: list[Skill], task: str) -> Skill | None:
-    """Select a skill only when one explicit alias appears unambiguously."""
-    normalized_task = task.lower().replace("_", "-").replace("/", "")
-    words = set(re.findall(r"[a-z0-9-]+", normalized_task))
-    matches: list[Skill] = []
-    for skill in skills:
-        aliases: set[str] = set()
-        if skill.trigger:
-            trigger = skill.trigger.lower().lstrip("/")
-            aliases.add(trigger)
-            if trigger.startswith("run_"):
-                aliases.add(trigger[4:])
-        aliases.add(skill.id.lower())
-        for alias in aliases:
-            alias_words = set(re.findall(r"[a-z0-9-]+", alias.replace("_", "-")))
-            if alias_words and alias_words <= words:
-                matches.append(skill)
-                break
-    return matches[0] if len(matches) == 1 else None
-
-
 def resolve_context(
     config: GlobalConfig,
     project_path: Path,
@@ -381,19 +360,12 @@ def resolve_context(
             result.available_preferences.append(pack)
 
     result.skill = _find(catalog.skills, skill_id, "skill")
-    routed_skill = False
-    if not result.skill and task:
-        result.skill = _route_skill(catalog.skills, task)
-        routed_skill = result.skill is not None
-    requested_role = role_id or (result.skill.role if result.skill else None)
-    result.role = _find(catalog.roles, requested_role, "role")
     if result.skill:
-        reason = (
-            f"unambiguous task alias in `{task}`"
-            if routed_skill else "explicitly requested"
-        )
-        result.selections.append(Selection("skill", result.skill.id, reason))
-    if result.role:
-        reason = "selected by skill" if result.skill and not role_id else "explicitly requested"
-        result.selections.append(Selection("role", result.role.id, reason))
+        result.selections.append(Selection("skill", result.skill.id, "explicitly requested"))
+
+    # Role resolution is transitional/legacy: resolved only when explicitly requested
+    if role_id:
+        result.role = _find(catalog.roles, role_id, "role")
+        if result.role:
+            result.selections.append(Selection("role", result.role.id, "explicitly requested"))
     return result

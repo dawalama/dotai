@@ -15,10 +15,10 @@ def roles():
     all_roles = load_all_roles(config)
 
     if not all_roles:
-        console.print("[dim]No roles found. Run `dotai init` to seed default roles.[/dim]")
+        console.print("[dim]No legacy roles found. (Roles are retired as an automatic abstraction; use native skills instead.)[/dim]")
         return
 
-    table = Table(title="Available Roles")
+    table = Table(title="Available Roles (Transitional)")
     table.add_column("Name", style="bold")
     table.add_column("Scope", style="dim")
     table.add_column("Description")
@@ -28,3 +28,4 @@ def roles():
         table.add_row(role.id, role.scope, role.description[:60], ", ".join(role.tags))
 
     console.print(table)
+    console.print("[yellow]Notice: Roles are retired as an automatic persona abstraction. Run `dotai migrate` to migrate existing roles to user-authored skills.[/yellow]")

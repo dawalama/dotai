@@ -215,6 +215,21 @@ def parse_skill_file(file_path: Path, scope: str = "global",
     # Merge gotchas from frontmatter and body
     all_gotchas = gotchas + body_gotchas
 
+    # Check for companion metadata (.dotai-metadata.json)
+    metadata_file = (assets_dir / ".dotai-metadata.json") if assets_dir else None
+    if metadata_file and metadata_file.exists():
+        try:
+            extra_meta = json.loads(metadata_file.read_text())
+            if isinstance(extra_meta, dict):
+                if not category and "category" in extra_meta:
+                    category = _parse_category(extra_meta["category"])
+                if not trigger and "trigger" in extra_meta:
+                    trigger = extra_meta["trigger"]
+                if not allowed_tools and "allowed-tools" in extra_meta:
+                    allowed_tools = _parse_list_field(str(extra_meta["allowed-tools"]))
+        except (json.JSONDecodeError, OSError):
+            pass
+
     return Skill(
         id=generate_skill_id(name),
         name=name,
@@ -260,12 +275,15 @@ def load_skills_from_dir(skills_dir: Path, scope: str = "global") -> list[Skill]
             skill.source = src.get("url", "")
             skills.append(skill)
 
-    # Folder-based skills (directories with main.md)
+    # Folder-based skills (canonical SKILL.md or legacy main.md)
     for item in sorted(skills_dir.iterdir()):
-        if item.is_dir() and (item / "main.md").exists():
+        if not item.is_dir():
+            continue
+        skill_file = item / "SKILL.md" if (item / "SKILL.md").exists() else (item / "main.md" if (item / "main.md").exists() else None)
+        if skill_file:
             skill_config = _load_skill_config(item)
             skill = parse_skill_file(
-                item / "main.md",
+                skill_file,
                 scope=scope,
                 assets_dir=item,
                 skill_config=skill_config,
@@ -342,7 +360,7 @@ Brief description of what this skill does and when to use it.
         return main_content
 
     return {
-        "main.md": main_content,
+        "SKILL.md": main_content,
         "config.json": json.dumps({"version": "1.0"}, indent=2) + "\n",
         "scripts/.gitkeep": "",
         "assets/.gitkeep": "",
@@ -381,8 +399,8 @@ def install_skill_from_repo(repo_url: str, dest_dir: Path,
                     f"Skill '{skill_name}' not found in {repo_url}"
                 )
         else:
-            # Check if the repo root IS a skill (has main.md or a single .md)
-            if (tmp_path / "main.md").exists():
+            # Check if the repo root IS a skill (has SKILL.md, main.md, or a single .md)
+            if (tmp_path / "SKILL.md").exists() or (tmp_path / "main.md").exists():
                 source = tmp_path
                 skill_name = tmp_path.name
             else:

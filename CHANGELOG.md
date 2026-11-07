@@ -1,6 +1,49 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-11-07
+
+### Product focus decision
+
+- Narrowed dotai around **durable personal developer guidance**—private standards,
+  architectural decisions, local constraints, exceptions, and lessons deliberately
+  retained across repositories and coding agents. Retired features that merely
+  duplicated ordinary engineering competence or native harness capabilities.
+
+### Added
+
+- `dotai migrate`: Losslessly migrates legacy folder skills (`main.md` -> `SKILL.md`)
+  and legacy persona roles to user-authored perspective skills with safety backups
+  under `~/.config/dotai/backups/`. Supports `--dry-run` to preview actions.
+
+### Changed
+
+- **Native skill packages**: Adopt canonical `SKILL.md` packages with package bodies,
+  metadata, scripts, references, assets, and relative paths kept intact. Removed
+  lossy section slicing from skill converters. Dotai-specific metadata is stored
+  cleanly in `.dotai-metadata.json`.
+- **Durable personal guidance focus**: Fresh initialization (`dotai init`) creates
+  empty starter structures and `rules.md` without bundling mandatory generic
+  workflow or persona libraries. Existing user files are preserved during upgrade.
+- **Explicit workflow selection**: Removed implicit task-word routing (`_route_skill`).
+  Incidental words in tasks do not trigger workflows; skills load only when
+  explicitly requested (`--skill`).
+- **Retired automatic persona injection**: Roles are deprecated as a first-class
+  abstraction; perspective guidance is maintained as standard user-authored skills.
+  Legacy roles remain readable for backward compatibility and can be migrated.
+- **Claude bootstrap reassessment**: Avoid unconditional repeated resolver calls
+  when no file-scoped guidance exists or task state has not changed.
+- **Accurate product claims**: Receipt reporting and documentation distinguish
+  selection from agent compliance or causality ("what dotai selected and returned,
+  and why"), distinguish Claude Code's automatic user-memory adapter from portable
+  manual CLI resolution, and state clearly that prompt rules are guidance rather
+  than enforced sandbox boundaries.
+
+### Removed
+
+- Bundled generic seed workflows (`src/dotai/seed/skills/*`, including prompt-based
+  careful mode and session-bootstrap context dumps) and generic seed roles
+  (`src/dotai/seed/roles/*`) from default installation. Existing user-installed
+  files in `~/.ai/` and project `.ai/` directories are never deleted.
 
 ## 0.7.1 — 2026-11-06
 

@@ -316,9 +316,9 @@ class TestConvertClaudeToDotai:
         assert result.exists()
         content = result.read_text()
         assert "name: PDF Summarizer" in content
-        assert "## Inputs" in content
-        assert "## Examples" in content
-        assert "## Gotchas" in content
+        assert "## Parameters" in content or "## Inputs" in content
+        assert "## Usage" in content or "## Examples" in content
+        assert "## Caveats" in content or "## Gotchas" in content
         assert "`file_path`" in content
 
     def test_sets_trigger(self, claude_skill_file, tmp_path):

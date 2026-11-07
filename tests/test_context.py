@@ -68,7 +68,7 @@ def test_only_active_preferences_in_requested_domain(ai_dir, config):
     assert "Use quiet borders." not in resolved.to_prompt()
 
 
-def test_explicit_skill_loads_its_default_role(
+def test_explicit_skill_resolution(
     ai_dir, tmp_path, sample_skill_file, sample_role_file
 ):
     config = GlobalConfig(
@@ -79,12 +79,19 @@ def test_explicit_skill_loads_its_default_role(
     resolved = resolve_context(config, tmp_path, "repo", skill_id="run_test")
 
     assert resolved.skill and resolved.skill.id == "test-skill"
-    assert resolved.role and resolved.role.id == "test-reviewer"
+    # Automatic persona injection is retired; roles are only resolved when explicitly requested
+    assert resolved.role is None
     assert "Run the project test suite" in resolved.to_prompt()
-    assert "You are a test reviewer" in resolved.to_prompt()
+
+    # Explicit role loading remains supported as transitional compatibility
+    resolved_with_role = resolve_context(
+        config, tmp_path, "repo", skill_id="run_test", role_id="test-reviewer"
+    )
+    assert resolved_with_role.role and resolved_with_role.role.id == "test-reviewer"
+    assert "You are a test reviewer" in resolved_with_role.to_prompt()
 
 
-def test_task_routes_unambiguous_skill_alias(
+def test_task_words_do_not_route_skills_implicitly(
     ai_dir, tmp_path, sample_skill_file, sample_role_file
 ):
     config = GlobalConfig(
@@ -96,10 +103,8 @@ def test_task_routes_unambiguous_skill_alias(
         config, tmp_path, "repo", task="Please run_test before we ship"
     )
 
-    assert resolved.skill and resolved.skill.id == "test-skill"
-    assert "unambiguous task alias" in resolved.reason_for("skill", "test-skill")
-    assert resolved.provisional is True
-    assert "Provisional Resolution — Files Required" in resolved.to_prompt()
+    # Incidental task words do not activate an unrelated workflow
+    assert resolved.skill is None
 
 
 def test_file_aware_skill_resolution_is_complete(
@@ -114,7 +119,7 @@ def test_file_aware_skill_resolution_is_complete(
         config,
         tmp_path,
         "repo",
-        task="Please run_test",
+        skill_id="run_test",
         files=["tests/test_api.py"],
     )
 
