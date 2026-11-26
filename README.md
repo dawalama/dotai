@@ -209,8 +209,9 @@ dotai agent setup all --apply
 
 ### Understanding what dotai selected and returned
 
-`dotai insights` aggregates local resolution receipts so you can see what
-dotai selected and returned over time:
+When you resolve context explicitly via `dotai context --agent <name>` (or use the
+legacy `--mode cli-bootstrap` adapter), `dotai insights` aggregates local resolution
+receipts so you can see what dotai selected and returned over time:
 
 ```bash
 dotai insights
@@ -232,35 +233,45 @@ History contains metadata only and is stored under
 source contents, or credentials. History is bounded to the latest 500 receipts
 per agent and never leaves the machine.
 
-If no receipt appears, refresh the adapter and start a new Claude Code session:
+> **Note:** Native projection (`dotai agent setup ... --apply`) loads directly
+> from each harness's native config without mid-conversation CLI calls, so it
+> does not write resolution receipts—use `dotai agent status all` to verify sync.
+> If you use the legacy Claude CLI-pull bootstrap and no receipt appears, refresh
+> it and start a new Claude Code session:
 
 ```bash
-dotai agent setup claude --apply
-dotai agent status claude
+dotai agent setup claude --mode cli-bootstrap --apply
+dotai agent status claude --mode cli-bootstrap
 ```
 
-Setup pins the dotai executable used to install the adapter, avoiding an older
-`dotai` elsewhere on `PATH`. Receipt persistence is best-effort: if its local
-directory is unavailable, Claude still receives resolved context and dotai emits
-a warning instead of blocking the task.
+Legacy `cli-bootstrap` setup pins the dotai executable used to install the
+adapter, avoiding an older `dotai` elsewhere on `PATH`. Receipt persistence is
+best-effort: if its local directory is unavailable, Claude still receives
+resolved context and dotai emits a warning instead of blocking the task.
 
 ## Usage
 
 ### Daily workflow
 
+With native projection configured, open Claude Code, Codex, or Gemini CLI and
+work normally—your rules, notes, preferences, and skills load natively from
+your user-level agent directories. Whenever you add or edit guidance in `~/.ai/`,
+re-project it across all targets:
+
 ```bash
-# Start of day: refresh local context for the project you're working on
+# Re-project updated ~/.ai/ guidance into your coding agents
+dotai agent setup all --apply
+dotai agent status all
+
+# Optional: refresh local project context cache or print a portable primer
 cd ~/my-project
 dotai sync
-
-# Print the context for an agent that uses portable CLI resolution
 dotai primer --path .
 ```
 
-With the Claude adapter installed, daily use is simpler: open Claude Code and
-ask for the work normally. Claude invokes the pinned dotai executable, resolves
-applicable guidance, and resolves again with affected files when file-scoped rules
-apply. Use `dotai agent last claude` whenever you want to verify what was selected.
+If you opt into the legacy `--mode cli-bootstrap` adapter for Claude Code, use
+`dotai agent last claude` whenever you want to verify the most recent CLI
+resolution receipt.
 
 ### Using skills
 
@@ -491,15 +502,12 @@ dotai init ~/other-project
 │       ├── scripts/
 │       ├── assets/
 │       └── config.json
-├── roles/                      # Transitional (legacy custom roles; migrate via dotai migrate)
-└── tools/                      # Python tool implementations
-    └── *.py
+└── roles/                      # Transitional (legacy custom roles; migrate via dotai migrate)
 
 <project>/.ai/                  # Per-project overrides
 ├── rules.md                    # Project-specific rules and conventions
 ├── rules/                      # Project-specific structured rules
-├── skills/                     # Project-specific skills
-└── tools/                      # Project-specific tools
+└── skills/                     # Project-specific skills
 ```
 
 ## Skills
@@ -627,7 +635,7 @@ dotai context --path . --files src/app.tsx --context security
 dotai context --path . --skill deploy
 ```
 
-Use the Claude Code adapter (`dotai agent setup claude --apply`) for automatic delivery in Claude Code. For any other agent, paste or pipe `dotai primer --path .`, then use `dotai context` for task-specific expansion.
+Use native projection (`dotai agent setup all --apply`, or target `claude`, `codex`, `gemini`, or `agents` individually) for automatic user-level delivery. For other agents or custom scripts, paste or pipe `dotai primer --path .`, then use `dotai context` for task-specific expansion.
 
 ## Installing Skills
 
