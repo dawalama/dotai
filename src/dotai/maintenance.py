@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import math
@@ -35,6 +36,21 @@ PREFERENCE_MARKERS = (
     "when possible",
     "style choice",
 )
+CONDITIONAL_MARKERS = (
+    "if you are working on",
+    "try to ",
+    "consider using",
+    "if applicable",
+    "you might want to",
+    "if appropriate",
+)
+RULE_BUDGET_WARN = 40
+RULE_BUDGET_HIGH = 150
+_NEGATION_TERMS = {"never", "avoid", "dont", "don't", "forbid", "ban", "prohibit", "not"}
+_AFFIRMATIVE_TERMS = {"always", "must", "require", "required", "use", "prefer", "enforce"}
+_SKIP_WALK_DIRS = frozenset({
+    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".pytest_cache", ".mypy_cache",
+})
 HIGH_CONSEQUENCE_MARKERS = (
     "credential",
     "secret",
@@ -149,11 +165,19 @@ def audit_rules(
     config: GlobalConfig,
     *,
     project_name: str | None = None,
+    repo_path: Path | None = None,
     include_disabled: bool = False,
 ) -> AuditReport:
     """Audit the effective rule set without modifying files."""
+    resolved_repo: Path | None = None
+    if repo_path is not None:
+        resolved_repo = repo_path.expanduser().resolve()
+
     if project_name:
         rules = resolve_rules_for_project(config, project_name)
+        project_obj = config.get_project(project_name)
+        if resolved_repo is None and project_obj is not None:
+            resolved_repo = project_obj.path.expanduser().resolve()
         if include_disabled:
             from .scope import resolve_scope
 
@@ -164,6 +188,18 @@ def audit_rules(
                 for rule in load_rules_from_dir(entry.path / "rules", entry.scope)
             ])
         scope = project_name
+    elif resolved_repo is not None:
+        from .catalog import load_catalog
+
+        catalog = load_catalog(config, project_path=resolved_repo)
+        rules = catalog.rules
+        if include_disabled:
+            rules = _dedupe_rule_paths([
+                rule
+                for entry in catalog.scope.directories
+                for rule in load_rules_from_dir(entry.path / "rules", entry.scope)
+            ])
+        scope = resolved_repo.name
     else:
         rules = load_rules_from_dir(config.global_rules_path, "global")
         if not include_disabled:
@@ -177,6 +213,10 @@ def audit_rules(
     metrics.sort(key=lambda metric: (-metric.estimated_tokens, metric.rule_id))
     findings = _structural_findings(rules, metrics)
     findings.extend(_overlap_findings(rules))
+    findings.extend(_budget_findings(rules))
+    if resolved_repo is not None and resolved_repo.is_dir():
+        findings.extend(_dead_glob_findings(rules, resolved_repo))
+        findings.extend(_team_conflict_findings(rules, resolved_repo))
     findings.sort(
         key=lambda finding: (
             -SEVERITY_ORDER[finding.severity],
@@ -610,6 +650,12 @@ def _structural_findings(
                 "Rule uses preference-like language rather than a hard constraint",
                 "Review whether this belongs in a preference pack.",
             ))
+        if any(marker in combined for marker in CONDITIONAL_MARKERS):
+            findings.append(AuditFinding(
+                "conditional-wording", "low", [rule.id],
+                "Rule uses weak conditional or hedged phrasing that coding agents frequently skip",
+                "Rewrite as a direct prescription ('Always ...', 'Never ...', or 'Do X because Y').",
+            ))
         metric = metrics_by_id[rule.id]
         if metric.estimated_tokens >= 500:
             review_sections = _reviewable_sections(rule.body)
@@ -668,6 +714,168 @@ def _overlap_findings(rules: list[Rule]) -> list[AuditFinding]:
                     "Review them together and merge only if their intent and scope are equivalent.",
                     f"similarity {similarity:.0%}",
                 ))
+    return findings
+
+
+def _budget_findings(rules: list[Rule]) -> list[AuditFinding]:
+    """Flag when active rule counts approach instruction-following ceilings."""
+    count = len(rules)
+    if count >= RULE_BUDGET_HIGH:
+        return [AuditFinding(
+            "rule-budget", "high", [r.id for r in rules[:5]],
+            f"{count} active rules exceed the ~{RULE_BUDGET_HIGH}-directive reliability ceiling",
+            "Retire stale rules, scope universal rules with globs, or graduate hard invariants to linters/hooks.",
+            f"{count} active rules",
+        )]
+    if count >= RULE_BUDGET_WARN:
+        return [AuditFinding(
+            "rule-budget", "medium", [r.id for r in rules[:5]],
+            f"{count} active rules are accumulating toward attention limits",
+            "Review unused or overly broad rules to keep personal context sharp.",
+            f"{count} active rules",
+        )]
+    return []
+
+
+def _walk_repo_files(repo_path: Path, limit: int = 10000) -> list[str]:
+    files: list[str] = []
+    for root, dirs, filenames in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_WALK_DIRS]
+        rel_root = Path(root).relative_to(repo_path)
+        for name in filenames:
+            rel = (rel_root / name).as_posix() if str(rel_root) != "." else name
+            files.append(rel)
+            if len(files) >= limit:
+                return files
+    return files
+
+
+def _dead_glob_findings(rules: list[Rule], repo_path: Path) -> list[AuditFinding]:
+    """Flag file-scoped rules whose globs match zero files in the repository."""
+    from .models import CATCH_ALL_GLOBS
+
+    scoped = [r for r in rules if not r.is_universal and r.globs]
+    if not scoped:
+        return []
+    repo_files = _walk_repo_files(repo_path)
+    if not repo_files:
+        return []
+
+    findings: list[AuditFinding] = []
+    for rule in scoped:
+        patterns = [p for p in rule.globs if p not in CATCH_ALL_GLOBS]
+        if not patterns:
+            continue
+        matched = False
+        for rel in repo_files:
+            basename = Path(rel).name
+            if any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(basename, pat) for pat in patterns):
+                matched = True
+                break
+        if not matched:
+            findings.append(AuditFinding(
+                "dead-glob", "low", [rule.id],
+                f"Scoped rule globs match no files in {repo_path.name}",
+                "Update the glob pattern, disable this rule for this project, or retire it if obsolete.",
+                f"unmatched globs: {', '.join(patterns)}",
+            ))
+    return findings
+
+
+def _discover_team_instruction_files(repo_path: Path) -> list[Path]:
+    """Locate team-owned agent instruction files in a repository."""
+    found: list[Path] = []
+    for rel in ("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", ".github/copilot-instructions.md"):
+        candidate = repo_path / rel
+        if candidate.is_file() and not candidate.is_symlink():
+            found.append(candidate)
+    for subdir, pattern in ((".claude/rules", "*.md"), (".cursor/rules", "*.mdc"), (".github/instructions", "*.instructions.md")):
+        d = repo_path / subdir
+        if d.is_dir() and not d.is_symlink():
+            for path in sorted(d.glob(pattern)):
+                if path.is_file() and not path.is_symlink():
+                    found.append(path)
+    return found
+
+
+def _polarity(text: str) -> str | None:
+    lower = text.lower()
+    words = set(re.findall(r"[a-z']+", lower))
+    has_neg = bool(words & _NEGATION_TERMS) or "do not " in lower
+    has_aff = bool(words & _AFFIRMATIVE_TERMS)
+    if has_neg:
+        return "negative"
+    if has_aff:
+        return "affirmative"
+    return None
+
+
+def _team_conflict_findings(rules: list[Rule], repo_path: Path) -> list[AuditFinding]:
+    """Compare personal rules against repository team instruction files."""
+    from .sync import _without_dotai_section
+
+    team_files = _discover_team_instruction_files(repo_path)
+    if not team_files:
+        return []
+
+    # Collect non-empty directive segments (lines/paragraphs) from team files
+    team_segments: list[tuple[str, str, set[str]]] = []
+    for path in team_files:
+        try:
+            text = _without_dotai_section(path.read_text())
+        except OSError:
+            continue
+        rel = path.relative_to(repo_path).as_posix()
+        for line in text.splitlines():
+            cleaned = re.sub(r"^\s*[-*#>]+\s*", "", line).strip()
+            if len(cleaned) < 15:
+                continue
+            toks = set(_tokens(cleaned))
+            if len(toks) >= 3:
+                team_segments.append((rel, cleaned, toks))
+
+    if not team_segments:
+        return []
+
+    findings: list[AuditFinding] = []
+    for rule in rules:
+        rule_text = f"{rule.description} {rule.body}".strip()
+        rule_toks = set(_tokens(rule_text))
+        if len(rule_toks) < 3:
+            continue
+        rule_pol = _polarity(rule_text)
+        best_conflict: tuple[str, str] | None = None
+        best_overlap: tuple[float, str, str] | None = None
+
+        for rel, seg_text, seg_toks in team_segments:
+            shared = (rule_toks & seg_toks) - _NEGATION_TERMS - _AFFIRMATIVE_TERMS
+            union = (rule_toks | seg_toks) - _NEGATION_TERMS - _AFFIRMATIVE_TERMS
+            if not union:
+                continue
+            sim = len(shared) / len(union)
+            seg_pol = _polarity(seg_text)
+            if rule_pol and seg_pol and rule_pol != seg_pol and len(shared) >= 2 and sim >= 0.25:
+                best_conflict = (rel, seg_text)
+                break
+            if sim >= 0.45 and (best_overlap is None or sim > best_overlap[0]):
+                best_overlap = (sim, rel, seg_text)
+
+        if best_conflict:
+            rel, seg_text = best_conflict
+            findings.append(AuditFinding(
+                "team-conflict", "high", [rule.id],
+                f"Personal rule may contradict team instructions in `{rel}`",
+                "Team instructions are authoritative; disable this rule for this project or align it with team policy.",
+                f"{rel}: {seg_text[:100]}",
+            ))
+        elif best_overlap:
+            sim, rel, seg_text = best_overlap
+            findings.append(AuditFinding(
+                "team-overlap", "medium", [rule.id],
+                f"Personal rule overlaps with team instructions in `{rel}`",
+                "Consider disabling this personal rule for this project so team instructions stay the single source of truth.",
+                f"similarity {sim:.0%} with {rel}: {seg_text[:80]}",
+            ))
     return findings
 
 

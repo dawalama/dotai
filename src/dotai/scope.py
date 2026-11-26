@@ -1,7 +1,7 @@
 """Discover applicable knowledge directories without scanning other projects."""
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .models import GlobalConfig
@@ -32,6 +32,7 @@ class KnowledgeScope:
     project_name: str | None
     directories: list[KnowledgeDirectory]
     disabled_rules: frozenset[str]
+    untrusted_directories: tuple[Path, ...] = field(default_factory=tuple)
 
 
 def resolve_scope(
@@ -76,16 +77,23 @@ def resolve_scope(
     ancestors = list(reversed(ancestors[:ancestors.index(boundary) + 1]))
     seen = {global_dir}
     disabled_rules: set[str] = set()
+    untrusted: list[Path] = []
     for ancestor in ancestors:
         owner = registered.get(ancestor)
         if owner:
             disabled_rules.update(owner.disabled_rules)
         ai_dir = (owner.full_ai_path if owner else ancestor / ".ai").expanduser().resolve()
         if ai_dir not in seen:
+            is_trusted = owner is not None or config.is_path_trusted(ancestor)
+            if not is_trusted and ai_dir.is_dir():
+                untrusted.append(ai_dir)
+                if config.require_trust:
+                    seen.add(ai_dir)
+                    continue
             scope = owner.name if owner else f"local:{ancestor}"
             directories.append(KnowledgeDirectory(scope, ai_dir, ancestor))
             seen.add(ai_dir)
     return KnowledgeScope(
         path, project.name if project else None, directories,
-        frozenset(disabled_rules),
+        frozenset(disabled_rules), tuple(untrusted),
     )

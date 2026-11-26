@@ -5,22 +5,25 @@
 dotai carries your private engineering guidance across coding agents. Keep your standards, local constraints, preferences, and custom workflows in `~/.ai/`; dotai selects and returns only the guidance each task needs without taking ownership of team files.
 
 ```text
-~/.ai/ ── dotai context ── relevant rules + preferences + explicit skill
-   │
-   └──── dotai sync ────── local context cache (outside Git repositories)
+~/.ai/ ── dotai agent setup all --apply ──→ ~/.claude/rules/ (native paths: globs) + ~/.claude/skills/
+   │                                    ──→ ~/.codex/AGENTS.md + ~/.gemini/GEMINI.md + ~/.agents/skills/
+   ├── dotai harvest claude ──────────────← promote durable lessons from native auto-memory
+   └── dotai audit --path . ──────────────→ team-conflict, dead-glob & wording checks
 ```
 
-Teach it once. Apply it when relevant. Know what dotai selected and returned, and why. No server, account, or proprietary memory layer—just portable Markdown that you own.
+Teach it once. Project it natively into every agent. Keep team instructions authoritative. No server, account, extra LLM turns, or proprietary memory layer—just portable Markdown that you own.
 
 ## The short version
 
 | You want to… | Use |
 |---|---|
 | Teach agents a standard, taste, or guardrail | `dotai learn --directive` |
-| Use dotai automatically in Claude Code (user-level adapter) | `dotai agent setup claude --apply` |
-| See what dotai selected and returned for Claude | `dotai agent last claude` |
-| Resolve context portably in any other agent or script | `dotai context` / `dotai primer` |
-| Prepare a safe per-repository cache | `dotai sync` |
+| Project `~/.ai/` natively into Claude, Codex, Gemini, `~/.agents/` | `dotai agent setup all --apply` |
+| Check whether projected agent configs are in sync | `dotai agent status all` |
+| Harvest durable lessons from Claude Code auto-memory | `dotai harvest claude` |
+| Audit rules for team conflicts, dead globs & weak wording | `dotai audit --path .` |
+| Protect against untrusted repo `.ai/` instruction poisoning | `dotai trust --strict on` |
+| Inspect/debug resolved context for specific files | `dotai context --path . --files ...` |
 | Migrate legacy folder skills (`main.md`) or roles to `SKILL.md` | `dotai migrate` |
 
 The default is personal and repository-safe. Team instructions stay authoritative.
@@ -156,51 +159,53 @@ are listed without their bodies; select one with `--domain cli`, or load a named
 pack directly with `--with-prefs <id>` regardless of its domain. Explicit packs
 remain subject to scope and enabled state.
 
-### Automatic delivery (Claude Code) vs. portable CLI resolution
+### Native multi-agent projection (`claude`, `codex`, `gemini`, `agents`)
 
-`dotai context` and `dotai primer` provide portable manual resolution for any coding agent or script. For **Claude Code**, dotai also includes a dedicated user-level adapter so you do not have to run `dotai context` manually during normal work. Install it once:
+Instead of asking your agent to shell out to a CLI mid-conversation (which burns tool turns, breaks prompt caching, and relies on conditional prompt compliance), `dotai agent setup` **compiles and projects** `~/.ai/` directly into each tool's native user-level config directories—without modifying any Git repository:
 
 ```bash
-# Preview the user-memory change
-dotai agent setup claude
+# Preview native projection across Claude Code, Codex, Gemini CLI, and ~/.agents/
+dotai agent setup all
 
-# Back up existing memory and install it
+# Back up existing user files and apply
+dotai agent setup all --apply
+
+# Or target a single agent (claude | codex | gemini | agents)
 dotai agent setup claude --apply
 
-# Confirm activation
-dotai agent status claude
+# Check whether native targets are in sync with ~/.ai/
+dotai agent status all
 
-# See the most recent context dotai selected and returned for Claude
-dotai agent last claude
+# Remove only dotai-managed files and blocks
+dotai agent remove all --apply
 ```
 
-The adapter adds a small marker-managed block to `~/.claude/CLAUDE.md`, which
-Claude Code loads as user memory across projects. It tells Claude to resolve
-dotai context for substantial development work, after affected files are known,
-and to avoid repeated calls when no file-scoped rules apply or the task has not
-changed. Repository and organization instructions remain authoritative.
+What gets projected per target:
+- **`claude`**: Compiles each enabled rule into `~/.claude/rules/dotai-<id>.md` using native `paths:` YAML frontmatter for file-scoped rules (universal rules omit `paths:`), projects `rules.md` and active general preferences, prunes stale dotai-managed files, and symlinks native `SKILL.md` folders into `~/.claude/skills/`.
+- **`codex`**: Maintains a marker-managed block in `~/.codex/AGENTS.md` (preserving your existing instructions) and symlinks `SKILL.md` folders into `~/.agents/skills/`.
+- **`gemini`**: Maintains a marker-managed block in `~/.gemini/GEMINI.md` and symlinks `SKILL.md` folders into `~/.agents/skills/`.
+- **`agents`**: Maintains a marker-managed block in `~/.agents/AGENTS.md` and symlinks `SKILL.md` folders into `~/.agents/skills/`.
 
-When file-scoped rules exist, a resolution without `--files` is explicitly
-marked provisional. Claude resolves again after discovering the affected
-files. `dotai agent last claude` reports whether the latest resolution is
-`provisional` or `resolved`, and whether file scope was provided or remains
-unknown. Supplied files do not prove that every affected file was discovered.
+All previews are read-only by default; `--apply` backs up any modified existing files under `~/.config/dotai/backups/agents/`. Unmanaged user files and external symlinks are never touched.
 
-The adapter does not modify repositories, install a persistent process, or use
-MCP. Existing personal Claude instructions are preserved. To remove only
-dotai's block:
+> **Legacy CLI-pull mode:** If you prefer the older `~/.claude/CLAUDE.md` bootstrap that instructs Claude to invoke `dotai context`, pass `--mode cli-bootstrap` (e.g., `dotai agent remove claude --mode cli-bootstrap --apply` to clean up an older install). `dotai context --path . --files ...` remains available as a deterministic inspection and scripting tool.
+
+### Harvesting lessons from native auto-memory
+
+Coding agents like Claude Code accumulate per-project auto-memory silently under `~/.claude/projects/*/memory/`. Use `dotai harvest` to review those local notes (read-only), filter out index links and duplicates already in `~/.ai/rules/`, and explicitly promote durable lessons:
 
 ```bash
-dotai agent remove claude
-dotai agent remove claude --apply
+# Inspect candidate lessons from Claude Code auto-memory
+dotai harvest claude
+dotai harvest claude --project my-app
+
+# Preview promoting candidate #1 into ~/.ai/rules/
+dotai harvest claude --promote 1 --dry-run
+
+# Save the promoted rule, then project it to all your agents
+dotai harvest claude --promote 1
+dotai agent setup all --apply
 ```
-
-Setup and removal preview by default. Applied changes back up the prior Claude
-memory under `~/.config/dotai/backups/agents/claude/`.
-
-`dotai agent last claude` reads a local receipt written only when the Claude
-adapter invokes the resolver. It reports selection metadata and reasons, but
-never stores source contents, expanded prompts, credentials, or telemetry.
 
 ### Understanding what dotai selected and returned
 
@@ -311,13 +316,32 @@ The loop: **teach or correct → review the structured rule → dotai resolves i
 Knowledge gets noisy as it grows. `dotai audit` reviews the effective ruleset locally and deterministically—nothing is sent to an external model.
 
 ```bash
-# Find weak, generic, preference-like, oversized, or overlapping rules
+# Find weak, conditional, generic, oversized, or overlapping rules
 dotai audit
 dotai audit --project my-app
 
+# Also check for dead globs and contradictions with repo AGENTS.md / CLAUDE.md / .claude/rules/
+dotai audit --path .
+
 # Machine-readable output or a CI quality gate
-dotai audit --json
-dotai audit --fail-on high
+dotai audit --path . --json
+dotai audit --path . --fail-on high
+```
+
+When `--path` (or `--project`) is provided, `dotai audit` also checks:
+- **`conditional-wording`**: flags hedged/conditional phrasing (*"if you are working on..."*, *"try to"*) that coding agents frequently skip, recommending direct prescriptions.
+- **`dead-glob`**: flags file-scoped rules whose globs match zero files in the repository.
+- **`team-conflict` / `team-overlap`**: reads repository team files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/rules/*.md`, `.cursor/rules/*.mdc`, `.github/copilot-instructions.md`) and flags personal rules that overlap with or contradict authoritative team instructions.
+- **`rule-budget`**: warns when active rule counts approach instruction-following ceilings.
+
+### Guarding against untrusted repository `.ai/` files
+
+Because cloned third-party repositories can include a `.ai/` directory (instruction-file poisoning), you can enable strict trust mode so unregistered repositories are ignored until explicitly trusted:
+
+```bash
+dotai trust --strict on
+dotai trust ~/work/my-repo
+dotai trust --list
 ```
 
 The report includes stable finding codes, evidence, suggested actions, an estimated prompt-token cost, and a context-concentration summary showing which rules dominate the budget. Large-rule findings show the rule's share of total context, change risk, reviewable sections, and a conservative manual-savings range. Security and other high-consequence rules receive preservation-first guidance and are deliberately protected from “the model probably knows this” recommendations.
@@ -695,12 +719,14 @@ dotai roles                            # List legacy roles (transitional)
 dotai migrate [--dry-run] [-p project] # Losslessly migrate legacy skills and roles
 dotai skills [-c category]             # List skills (optionally filter by category)
 dotai sync [path] [--check]            # Refresh safe local context
-dotai agent setup|status|last|remove claude [--apply]  # User-level Claude delivery
-dotai insights [--agent name] [-p project] [--json]  # Local selection & delivery receipts
+dotai agent setup|status|remove <claude|codex|gemini|agents|all> [--apply]  # Native user-level projection
+dotai harvest [claude] [-p project] [--promote N] [--dry-run]  # Curate lessons from native auto-memory
+dotai trust [path] [--remove] [--list] [--strict on|off]  # Guard against untrusted repo .ai/ dirs
+dotai insights [--agent name] [-p project] [--json]  # Local selection receipts (cli-bootstrap mode)
 dotai primer [--project <name>|--path <path>]  # Compact generic bootstrap
 dotai context --path <path> [--task ...] [--files ...] [--context ...] [--domain ...] [--skill ...]
 dotai rules [-p project] [-a] [--check]    # List rules (or audit quality)
-dotai audit [-p project] [--json] [--fail-on severity]  # Read-only rule audit
+dotai audit [-p project] [--path .] [--json] [--fail-on severity]  # Read-only rule & team-conflict audit
 dotai compress [-p project] [--json]       # Plan compression candidates
 dotai compress apply <proposal.json> [--yes]  # Validate, back up, and apply proposals
 dotai toggle <rule-id> --on/--off      # Enable/disable rules globally or per-project

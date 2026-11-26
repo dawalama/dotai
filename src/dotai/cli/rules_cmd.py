@@ -12,11 +12,12 @@ from . import app, console
 @app.command()
 def audit(
     project: Optional[str] = typer.Option(None, "--project", "-p", help="Audit rules effective for a registered project"),
+    path: Optional[str] = typer.Option(None, "--path", help="Repository path for dead-glob and team-conflict checks"),
     all: bool = typer.Option(False, "--all", "-a", help="Include disabled rules"),
     json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable report"),
     fail_on: Optional[str] = typer.Option(None, "--fail-on", help="Exit non-zero at or above: low, medium, high"),
 ):
-    """Audit rule quality, overlap, scope, and estimated context cost.
+    """Audit rule quality, compliance wording, dead globs, team conflicts, and context budget.
 
     The audit is deterministic, local, and read-only. No rule content is sent
     to an external service.
@@ -34,7 +35,8 @@ def audit(
     if project and not config.get_project(project):
         console.print(f"[red]Project '{project}' not found[/red]")
         raise typer.Exit(1)
-    report = audit_rules(config, project_name=project, include_disabled=all)
+    repo_path = Path(path).expanduser().resolve() if path else None
+    report = audit_rules(config, project_name=project, repo_path=repo_path, include_disabled=all)
 
     if json_output:
         console.print_json(json.dumps(report.to_dict()))

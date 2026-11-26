@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.0 — 2026-11-25
+
+### Added
+
+- **Native multi-agent projection (`dotai agent setup <claude|codex|gemini|agents|all> --apply`)**:
+  Compiles `~/.ai/` rules, freeform notes, active general preferences, and native `SKILL.md`
+  packages directly into each harness's native user-level config directories—eliminating
+  mid-conversation CLI tool calls and preserving prompt caching:
+  - `claude`: projects `~/.claude/rules/dotai-*.md` with native `paths:` YAML frontmatter for
+    file-scoped rules, prunes stale managed files, and symlinks `SKILL.md` packages into
+    `~/.claude/skills/`.
+  - `codex`, `gemini`, `agents`: projects marker-managed blocks into `~/.codex/AGENTS.md`,
+    `~/.gemini/GEMINI.md`, and `~/.agents/AGENTS.md` plus `~/.agents/skills/` symlinks.
+- **Auto-memory harvesting (`dotai harvest claude`)**: Read-only scanner for Claude Code's
+  `~/.claude/projects/*/memory/*.md` silos that filters out index links and already-covered
+  rules, with `--promote <N> [--dry-run]` to explicitly promote durable lessons into `~/.ai/rules/`.
+- **Compliance, dead-glob, budget, and team-conflict auditing (`dotai audit --path .`)**:
+  Adds deterministic checks for `conditional-wording`, `rule-budget`, `dead-glob` (globs
+  matching zero files in a repo), and `team-conflict` / `team-overlap` against repository
+  `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/rules/*.md`, `.cursor/rules/*.mdc`, and
+  `.github/copilot-instructions.md`.
+- **Repository trust gate (`dotai trust`)**: Adds `trusted_paths` and `require_trust`
+  (`--strict on|off`) to protect against instruction-file poisoning in untrusted repositories.
+
+### Changed
+
+- `dotai agent` defaults to `--mode native` across `claude`, `codex`, `gemini`, `agents`, and
+  `all`. Legacy Claude CLI self-invocation remains accessible via `--mode cli-bootstrap`.
+- `dotai init` no longer scaffolds legacy `tools/` directories or advertises `tools/` in primers.
+- `dotai.tools.registry.load_tools_from_file` now refuses to execute arbitrary Python modules
+  unless `allow_exec=True` is explicitly passed.
+
 ## 0.8.0 — 2026-11-07
 
 ### Product focus decision

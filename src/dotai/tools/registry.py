@@ -8,8 +8,16 @@ from ..models import GlobalConfig
 from .base import Tool, ToolRegistry, get_global_registry
 
 
-def load_tools_from_file(file_path: Path, scope: str = "global") -> list[Tool]:
-    """Load tools from a Python file using the @tool decorator."""
+def load_tools_from_file(
+    file_path: Path, scope: str = "global", *, allow_exec: bool = False
+) -> list[Tool]:
+    """Load tools from a Python file using the @tool decorator.
+
+    Refuses to execute arbitrary Python modules unless allow_exec=True is passed
+    explicitly (guarding against untrusted repository code execution).
+    """
+    if not allow_exec:
+        return []
     if not file_path.exists() or not file_path.suffix == ".py":
         return []
     if file_path.name.startswith("_"):

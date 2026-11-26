@@ -310,6 +310,14 @@ class GlobalConfig(BaseModel):
     version: str = "1.0.0"
     global_ai_dir: Path = Field(default=Path.home() / ".ai")
     projects: list[ProjectConfig] = Field(default_factory=list)
+    trusted_paths: list[str] = Field(
+        default_factory=list,
+        description="Repository or directory paths explicitly trusted for local .ai/ loading",
+    )
+    require_trust: bool = Field(
+        default=False,
+        description="When True, skip unregistered/untrusted repository .ai/ directories",
+    )
 
     @property
     def global_rules_path(self) -> Path:
@@ -335,3 +343,28 @@ class GlobalConfig(BaseModel):
         if existing:
             self.projects.remove(existing)
         self.projects.append(project)
+
+    def is_path_trusted(self, path: Path) -> bool:
+        resolved = path.expanduser().resolve()
+        if any(resolved.is_relative_to(p.path.expanduser().resolve()) for p in self.projects):
+            return True
+        for entry in self.trusted_paths:
+            try:
+                if resolved.is_relative_to(Path(entry).expanduser().resolve()):
+                    return True
+            except OSError:
+                continue
+        return False
+
+    def trust_path(self, path: Path) -> str:
+        resolved = str(path.expanduser().resolve())
+        if resolved not in self.trusted_paths:
+            self.trusted_paths.append(resolved)
+        return resolved
+
+    def untrust_path(self, path: Path) -> bool:
+        resolved = str(path.expanduser().resolve())
+        if resolved in self.trusted_paths:
+            self.trusted_paths.remove(resolved)
+            return True
+        return False

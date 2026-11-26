@@ -23,12 +23,12 @@ They should not need a platform, team rollout, or hosted memory service to get v
 
 ## Product loop
 
-1. **Capture** a standard, preference, local constraint, or correction.
-2. **Approve** what becomes durable developer knowledge.
-3. **Resolve** the minimum relevant knowledge for a task and its affected files.
-4. **Deliver** it through an adapter or explicit context command.
-5. **Explain** what dotai selected and returned, and why.
-6. **Audit** knowledge that is stale, conflicting, oversized, or ineffective.
+1. **Capture** a standard, preference, local constraint, or correction (`dotai learn` or `dotai harvest` from native agent auto-memory).
+2. **Approve** what becomes durable developer knowledge in `~/.ai/`.
+3. **Project** personal guidance into each coding agent's native user-level config (`~/.claude/rules/` with native `paths:` globs, `~/.claude/skills/`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.agents/`).
+4. **Inspect** exact rule resolution on demand (`dotai context --path . --files ...`).
+5. **Audit** knowledge for weak conditional wording, dead globs, rule-count budgets, and contradictions against repository team instructions (`dotai audit --path .`).
+6. **Trust** repository `.ai/` directories explicitly when working in untrusted codebases (`dotai trust`).
 7. **Retire** knowledge without losing control of its source or history.
 
 ## Product principles
@@ -69,6 +69,20 @@ dotai is not:
 - A transcript store, general-purpose agent memory, goal manager, or agent orchestrator.
 - A hosted vector database or production observability platform.
 - A replacement for repository and organization policy.
+
+## Product focus evolution (0.9.0)
+
+In 0.9.0, dotai evolves from a runtime CLI-pull middleware into a **native personal-knowledge compiler, curator, and conflict auditor**:
+
+- **Native multi-agent projection (`dotai agent setup <claude|codex|gemini|agents|all> --apply`):**
+  Compiles `~/.ai/` rules, notes, preferences, and native `SKILL.md` packages directly into each harness's native user-level surfaces (`~/.claude/rules/dotai-*.md` with native `paths:` frontmatter, `~/.claude/skills/`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, and `~/.agents/`). This eliminates extra LLM turns, preserves prompt caching, and delivers real multi-agent portability without touching repository files.
+  The legacy prompt-driven Claude CLI bootstrap remains available via `--mode cli-bootstrap` for backward compatibility, and `dotai context` remains the portable inspection/scripting resolver.
+- **Auto-memory harvesting (`dotai harvest claude`):**
+  Turns siloed, silently accumulated agent auto-memory (`~/.claude/projects/*/memory/`) into a read-only candidate feed so developers can explicitly review and promote durable lessons into `~/.ai/rules/`.
+- **Compliance & team-conflict auditing (`dotai audit --path .`):**
+  Flags weak conditional wording that agents frequently skip, file-scoped globs matching zero files in the current repo (`dead-glob`), rule-count attention ceilings (`rule-budget`), and personal rules that overlap with or contradict repository team instructions (`team-conflict` / `team-overlap`).
+- **Repository trust gate (`dotai trust`) & retirement of `~/.ai/tools/`:**
+  Guards against instruction-file poisoning in untrusted repos via explicit `trusted_paths` / `--strict on`, stops scaffolding `~/.ai/tools/`, and disables automatic `exec_module` execution of untrusted Python tool files.
 
 ## Product focus decision (0.8.0)
 

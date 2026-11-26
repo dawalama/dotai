@@ -23,7 +23,7 @@ def test_init_global_fresh_installation_has_no_generic_seeds(tmp_path, monkeypat
     assert (ai_dir / "rules").is_dir()
     assert (ai_dir / "skills").is_dir()
     assert (ai_dir / "preferences").is_dir()
-    assert (ai_dir / "tools").is_dir()
+    assert not (ai_dir / "tools").exists()
 
     # Crucial acceptance criterion: No mandatory generic workflow/persona library seeded
     skill_files = list((ai_dir / "skills").glob("*"))
